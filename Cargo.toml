@@ -6,6 +6,7 @@ authors = ["Lorenz Zahn"]
 description = "A fast, ergonomic TSPLIB95 parser and distance calculator for Rust"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/Fereon/tsplibp"
 keywords = ["tsp", "tsplib", "combinatorial-optimization", "cvrp", "routing"]
 categories = ["algorithms", "parser-implementations", "science"]
 exclude = ["instances/"]
