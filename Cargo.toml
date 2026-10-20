@@ -1,0 +1,18 @@
+[package]
+name = "tsplibp"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lorenz Zahn"]
+description = "A fast, ergonomic TSPLIB95 parser and distance calculator for Rust"
+license = "MIT"
+readme = "README.md"
+keywords = ["tsp", "tsplib", "combinatorial-optimization", "cvrp", "routing"]
+categories = ["algorithms", "parser-implementations", "science"]
+exclude = ["instances/"]
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "parsing"
+harness = false

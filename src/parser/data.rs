@@ -1,0 +1,619 @@
+use crate::{
+    datatypes::{
+        Data, Demand, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight, EdgeWeightFormat, Integer,
+        NodeCoordSection, NodeCoordType, NodeIdentifier, Specification, ThreeDimensionalNode,
+        TwoDimensionalNode,
+    },
+    error::TSPLibError,
+    parser::{parse_integer, parse_real, split_once_newline, split_once_whitespace},
+};
+
+fn parse_node_coord_section(
+    input: &str,
+    node_coord_type: Option<NodeCoordType>,
+    dimension: Option<Integer>,
+) -> Result<(NodeCoordSection, &str), TSPLibError> {
+    let node_coord_type = if let Some(node_coord_type) = node_coord_type {
+        node_coord_type
+    } else {
+        let (line, _) = split_once_newline(input);
+        let count = line.split_whitespace().count();
+        match count {
+            3 => NodeCoordType::TwodCoords,
+            4 => NodeCoordType::ThreedCoords,
+            _ => return Err(TSPLibError::UnkownNodeCoordType),
+        }
+    };
+
+    let Some(dimension) = dimension else {
+        return Err(TSPLibError::MissingDimension);
+    };
+
+    let mut rest = input;
+    match node_coord_type {
+        NodeCoordType::TwodCoords => {
+            let mut coords = Vec::with_capacity(dimension as usize);
+            for _ in 0..dimension {
+                let (id, r) = parse_integer(rest)?;
+                let (x, r) = parse_real(r)?;
+                let (y, r) = parse_real(r)?;
+                coords.push(TwoDimensionalNode {
+                    identifier: id,
+                    x_coordinate: x,
+                    y_coordinate: y,
+                });
+                rest = r;
+            }
+            Ok((NodeCoordSection::TwodCoords(coords), rest))
+        }
+        NodeCoordType::ThreedCoords => {
+            let mut coords = Vec::with_capacity(dimension as usize);
+            for _ in 0..dimension {
+                let (id, r) = parse_integer(rest)?;
+                let (x, r) = parse_real(r)?;
+                let (y, r) = parse_real(r)?;
+                let (z, r) = parse_real(r)?;
+                coords.push(ThreeDimensionalNode {
+                    identifier: id,
+                    x_coordinate: x,
+                    y_coordinate: y,
+                    z_coordinate: z,
+                });
+                rest = r;
+            }
+            Ok((NodeCoordSection::ThreedCoords(coords), rest))
+        }
+        NodeCoordType::NoCoords => Err(TSPLibError::UnexpectedNodeCoordSection),
+    }
+}
+
+fn parse_depot_section(input: &str) -> Result<(Vec<NodeIdentifier>, &str), TSPLibError> {
+    let mut rest = input;
+    let mut depots = Vec::new();
+    loop {
+        let (id, r) = parse_integer(rest)?;
+        rest = r;
+        if id == -1 {
+            break;
+        }
+        depots.push(id);
+    }
+    Ok((depots, rest))
+}
+
+fn parse_demand_section(
+    input: &str,
+    dimension: Option<Integer>,
+) -> Result<(Vec<Demand>, &str), TSPLibError> {
+    let Some(dimension) = dimension else {
+        return Err(TSPLibError::MissingDimension);
+    };
+
+    let mut rest = input;
+    let mut demands = Vec::with_capacity(dimension as usize);
+    for _ in 0..dimension {
+        let (id, r) = parse_integer(rest)?;
+        let (demand, r) = parse_integer(r)?;
+        demands.push((id, demand));
+        rest = r;
+    }
+    Ok((demands, rest))
+}
+
+fn parse_edge_data_section(
+    input: &str,
+    edge_data_format: Option<EdgeDataFormat>,
+) -> Result<(EdgeDataSection, &str), TSPLibError> {
+    let Some(edge_data_format) = edge_data_format else {
+        return Err(TSPLibError::MissingEdgeDataFormat);
+    };
+
+    let mut rest = input;
+    match edge_data_format {
+        EdgeDataFormat::EdgeList => {
+            let mut edges = Vec::new();
+            loop {
+                let (u, r) = parse_integer(rest)?;
+                if u == -1 {
+                    rest = r;
+                    break;
+                }
+                let (v, r) = parse_integer(r)?;
+                edges.push((u, v));
+                rest = r;
+            }
+            Ok((EdgeDataSection::EdgeList(edges), rest))
+        }
+        EdgeDataFormat::AdjList => {
+            let mut adj = Vec::new();
+            loop {
+                let (u, r) = parse_integer(rest)?;
+                if u == -1 {
+                    rest = r;
+                    break;
+                }
+                let mut neighbors = vec![u];
+                rest = r;
+                loop {
+                    let (v, r) = parse_integer(rest)?;
+                    rest = r;
+                    if v == -1 {
+                        break;
+                    }
+                    neighbors.push(v);
+                }
+                adj.push(neighbors);
+            }
+            Ok((EdgeDataSection::AdjList(adj), rest))
+        }
+    }
+}
+
+fn parse_fixed_data_section(input: &str) -> Result<(Vec<Edge>, &str), TSPLibError> {
+    let mut rest = input;
+    let mut edges = Vec::new();
+    loop {
+        let (u, r) = parse_integer(rest)?;
+        if u == -1 {
+            rest = r;
+            break;
+        }
+        let (v, r) = parse_integer(r)?;
+        edges.push((u, v));
+        rest = r;
+    }
+    Ok((edges, rest))
+}
+
+fn parse_display_data_section(
+    input: &str,
+    dimension: Option<Integer>,
+) -> Result<(Vec<TwoDimensionalNode>, &str), TSPLibError> {
+    let Some(dimension) = dimension else {
+        return Err(TSPLibError::MissingDimension);
+    };
+
+    let mut rest = input;
+    let mut display_data = Vec::with_capacity(dimension as usize);
+    for _ in 0..dimension {
+        let (id, r) = parse_integer(rest)?;
+        let (x, r) = parse_real(r)?;
+        let (y, r) = parse_real(r)?;
+        display_data.push(TwoDimensionalNode {
+            identifier: id,
+            x_coordinate: x,
+            y_coordinate: y,
+        });
+        rest = r;
+    }
+    Ok((display_data, rest))
+}
+
+fn parse_tour_section(
+    input: &str,
+    dimension: Option<Integer>,
+) -> Result<(Vec<NodeIdentifier>, &str), TSPLibError> {
+    let mut rest = input;
+
+    let mut tour = if let Some(dimension) = dimension {
+        Vec::with_capacity(dimension as usize)
+    } else {
+        Vec::new()
+    };
+
+    loop {
+        let (id, r) = parse_integer(rest)?;
+        rest = r;
+        if id == -1 {
+            break;
+        }
+        tour.push(id);
+    }
+    Ok((tour, rest))
+}
+
+fn parse_edge_weight_section(
+    input: &str,
+    dimension: Option<Integer>,
+    edge_weight_format: Option<EdgeWeightFormat>,
+) -> Result<(Vec<EdgeWeight>, &str), TSPLibError> {
+    let Some(edge_weight_format) = edge_weight_format else {
+        return Err(TSPLibError::MissingEdgeWeightFormat);
+    };
+
+    // Some SOP instances contain additional redundant data
+    let input = if edge_weight_format == EdgeWeightFormat::FullMatrix {
+        let (v, r) = split_once_newline(input);
+        match parse_integer(v) {
+            Ok((_, "")) => r,
+            _ => input,
+        }
+    } else {
+        input
+    };
+
+    let Some(dimension) = dimension else {
+        return Err(TSPLibError::MissingDimension);
+    };
+
+    let n = dimension as usize;
+    let count = match edge_weight_format {
+        EdgeWeightFormat::FullMatrix => n * n,
+        EdgeWeightFormat::UpperRow
+        | EdgeWeightFormat::LowerRow
+        | EdgeWeightFormat::UpperCol
+        | EdgeWeightFormat::LowerCol => n * (n - 1) / 2,
+        EdgeWeightFormat::UpperDiagRow
+        | EdgeWeightFormat::LowerDiagRow
+        | EdgeWeightFormat::UpperDiagCol
+        | EdgeWeightFormat::LowerDiagCol => n * (n + 1) / 2,
+        EdgeWeightFormat::Function => 0,
+    };
+
+    let mut rest = input;
+    let mut weights = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (w, r) = parse_integer(rest)?;
+        weights.push(w);
+        rest = r;
+    }
+    Ok((weights, rest))
+}
+
+pub fn parse_data_section<'a>(
+    input: &'a str,
+    specification: &Specification,
+) -> Result<(Data, &'a str), TSPLibError> {
+    let mut node_coord_section = None;
+    let mut depot_section = None;
+    let mut demand_section = None;
+    let mut edge_data_section = None;
+    let mut fixed_edges_section = None;
+    let mut display_data_section = None;
+    let mut tour_section = None;
+    let mut edge_weight_section = None;
+
+    let mut rest = input;
+    let mut keyword;
+    loop {
+        (keyword, rest) = split_once_whitespace(rest);
+        match keyword {
+            "NODE_COORD_SECTION" => {
+                let (value, r) = parse_node_coord_section(
+                    rest,
+                    specification.node_coord_type,
+                    specification.dimension,
+                )?;
+                node_coord_section = Some(value);
+                rest = r;
+            }
+            "DEPOT_SECTION" => {
+                let (value, r) = parse_depot_section(rest)?;
+                depot_section = Some(value);
+                rest = r;
+            }
+            "DEMAND_SECTION" => {
+                let (value, r) = parse_demand_section(rest, specification.dimension)?;
+                demand_section = Some(value);
+                rest = r;
+            }
+            "EDGE_DATA_SECTION" => {
+                let (value, r) = parse_edge_data_section(rest, specification.edge_data_format)?;
+                edge_data_section = Some(value);
+                rest = r;
+            }
+            "FIXED_EDGES_SECTION" | "FIXED_EDGES" => {
+                // Some examples contain erroneous notation
+                let (value, r) = if let (":", r) = split_once_whitespace(rest) {
+                    parse_fixed_data_section(r)?
+                } else {
+                    parse_fixed_data_section(rest)?
+                };
+
+                fixed_edges_section = Some(value);
+                rest = r;
+            }
+            "DISPLAY_DATA_SECTION" => {
+                let (value, r) = parse_display_data_section(rest, specification.dimension)?;
+                display_data_section = Some(value);
+                rest = r;
+            }
+            "TOUR_SECTION" => {
+                let (value, r) = parse_tour_section(rest, specification.dimension)?;
+                tour_section = Some(value);
+                rest = r;
+            }
+            "EDGE_WEIGHT_SECTION" => {
+                let (value, r) = parse_edge_weight_section(
+                    rest,
+                    specification.dimension,
+                    specification.edge_weight_format,
+                )?;
+                edge_weight_section = Some(value);
+                rest = r;
+            }
+            "EOF" | "" => break,
+            s => {
+                return Err(TSPLibError::UnexpectedKeyword(s.to_string()));
+            }
+        }
+    }
+
+    let data = Data {
+        node_coord_section,
+        depot_section,
+        demand_section,
+        edge_data_section,
+        fixed_edges_section,
+        display_data_section,
+        tour_section,
+        edge_weight_section,
+    };
+
+    Ok((data, rest))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::datatypes::{DisplayDataType, EdgeWeightFormat, EdgeWeightType, Type};
+
+    #[test]
+    fn test_parse_node_coord_section() {
+        let input = "1 1.0 2.0\n2 3.0 4.0";
+        let (v, rest) =
+            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), Some(2)).unwrap();
+        if let NodeCoordSection::TwodCoords(coords) = v {
+            assert_eq!(
+                coords,
+                vec![
+                    TwoDimensionalNode {
+                        identifier: 1,
+                        x_coordinate: 1.0,
+                        y_coordinate: 2.0
+                    },
+                    TwoDimensionalNode {
+                        identifier: 2,
+                        x_coordinate: 3.0,
+                        y_coordinate: 4.0
+                    }
+                ]
+            );
+        } else {
+            panic!("wrong variant");
+        }
+        assert_eq!(rest, "");
+
+        let input = "1 1.0 2.0 3.0\n2 4.0 5.0 6.0";
+        let (v, rest) =
+            parse_node_coord_section(input, Some(NodeCoordType::ThreedCoords), Some(2)).unwrap();
+        if let NodeCoordSection::ThreedCoords(coords) = v {
+            assert_eq!(
+                coords,
+                vec![
+                    ThreeDimensionalNode {
+                        identifier: 1,
+                        x_coordinate: 1.0,
+                        y_coordinate: 2.0,
+                        z_coordinate: 3.0
+                    },
+                    ThreeDimensionalNode {
+                        identifier: 2,
+                        x_coordinate: 4.0,
+                        y_coordinate: 5.0,
+                        z_coordinate: 6.0
+                    }
+                ]
+            );
+        } else {
+            panic!("wrong variant");
+        }
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_depot_section() {
+        let input = "1 2 3 -1";
+        let (v, rest) = parse_depot_section(input).unwrap();
+        assert_eq!(v, vec![1, 2, 3]);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_demand_section() {
+        let input = "1 10\n2 20";
+        let (v, rest) = parse_demand_section(input, Some(2)).unwrap();
+        assert_eq!(v, vec![(1, 10), (2, 20)]);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_edge_data_section() {
+        let input = "1 2\n3 4\n-1";
+        let (v, rest) = parse_edge_data_section(input, Some(EdgeDataFormat::EdgeList)).unwrap();
+        if let EdgeDataSection::EdgeList(edges) = v {
+            assert_eq!(edges, vec![(1, 2), (3, 4)]);
+        } else {
+            panic!("wrong variant");
+        }
+        assert_eq!(rest, "");
+
+        let input = "1 2 3 -1\n4 5 -1\n-1";
+        let (v, rest) = parse_edge_data_section(input, Some(EdgeDataFormat::AdjList)).unwrap();
+        if let EdgeDataSection::AdjList(adj) = v {
+            assert_eq!(adj, vec![vec![1, 2, 3], vec![4, 5]]);
+        } else {
+            panic!("wrong variant");
+        }
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_fixed_data_section() {
+        let input = "1 2\n3 4\n-1";
+        let (v, rest) = parse_fixed_data_section(input).unwrap();
+        assert_eq!(v, vec![(1, 2), (3, 4)]);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_display_data_section() {
+        let input = "1 1.0 2.0\n2 3.0 4.0";
+        let (v, rest) = parse_display_data_section(input, Some(2)).unwrap();
+        assert_eq!(
+            v,
+            vec![
+                TwoDimensionalNode {
+                    identifier: 1,
+                    x_coordinate: 1.0,
+                    y_coordinate: 2.0
+                },
+                TwoDimensionalNode {
+                    identifier: 2,
+                    x_coordinate: 3.0,
+                    y_coordinate: 4.0
+                }
+            ]
+        );
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_tour_section() {
+        let input = "1 2 3 4 5 -1";
+        let (v, rest) = parse_tour_section(input, Some(5)).unwrap();
+        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_edge_weight_section() {
+        let input = "1 2 3 4";
+        let (v, rest) =
+            parse_edge_weight_section(input, Some(2), Some(EdgeWeightFormat::FullMatrix)).unwrap();
+        assert_eq!(v, vec![1, 2, 3, 4]);
+        assert_eq!(rest, "");
+
+        let input = "1 2 3";
+        let (v, rest) =
+            parse_edge_weight_section(input, Some(3), Some(EdgeWeightFormat::UpperRow)).unwrap();
+        // n=3, n*(n-1)/2 = 3*2/2 = 3
+        assert_eq!(v, vec![1, 2, 3]);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_node_coord_section_inference() {
+        let input = "1 1.0 2.0\n2 3.0 4.0";
+        let (v, _) = parse_node_coord_section(input, None, Some(2)).unwrap();
+        if let NodeCoordSection::TwodCoords(coords) = v {
+            assert_eq!(
+                coords,
+                vec![
+                    TwoDimensionalNode {
+                        identifier: 1,
+                        x_coordinate: 1.0,
+                        y_coordinate: 2.0
+                    },
+                    TwoDimensionalNode {
+                        identifier: 2,
+                        x_coordinate: 3.0,
+                        y_coordinate: 4.0
+                    }
+                ]
+            );
+        } else {
+            panic!("should have inferred TwodCoords");
+        }
+
+        let input = "1 1.0 2.0 3.0\n2 4.0 5.0 6.0";
+        let (v, _) = parse_node_coord_section(input, None, Some(2)).unwrap();
+        if let NodeCoordSection::ThreedCoords(coords) = v {
+            assert_eq!(
+                coords,
+                vec![
+                    ThreeDimensionalNode {
+                        identifier: 1,
+                        x_coordinate: 1.0,
+                        y_coordinate: 2.0,
+                        z_coordinate: 3.0
+                    },
+                    ThreeDimensionalNode {
+                        identifier: 2,
+                        x_coordinate: 4.0,
+                        y_coordinate: 5.0,
+                        z_coordinate: 6.0
+                    }
+                ]
+            );
+        } else {
+            panic!("should have inferred ThreedCoords");
+        }
+    }
+
+    #[test]
+    fn test_parse_node_coord_section_errors() {
+        let input = "1 1.0 2.0";
+        assert!(parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None).is_err());
+        assert!(parse_node_coord_section(input, Some(NodeCoordType::NoCoords), Some(1)).is_err());
+        let bad_input = "1 1.0";
+        assert!(parse_node_coord_section(bad_input, None, Some(1)).is_err());
+    }
+
+    #[test]
+    fn test_parse_demand_section_error() {
+        let input = "1 10";
+        assert!(parse_demand_section(input, None).is_err());
+    }
+
+    #[test]
+    fn test_parse_edge_data_section_error() {
+        let input = "1 2 -1";
+        assert!(parse_edge_data_section(input, None).is_err());
+    }
+
+    #[test]
+    fn test_parse_data_section_complex() {
+        let spec = Specification {
+            name: "test".into(),
+            dtype: Type::TSP,
+            comment: vec![],
+            dimension: Some(2),
+            capacity: Some(0),
+            edge_weight_type: Some(EdgeWeightType::Euc2D),
+            edge_weight_format: Some(EdgeWeightFormat::FullMatrix),
+            edge_data_format: Some(EdgeDataFormat::EdgeList),
+            node_coord_type: Some(NodeCoordType::TwodCoords),
+            display_data_type: Some(DisplayDataType::NoDisplay),
+        };
+        let input = "NODE_COORD_SECTION\n1 1.0 2.0\n2 3.0 4.0\nFIXED_EDGES_SECTION\n1 2\n-1\nEOF";
+        let (data, rest) = parse_data_section(input, &spec).unwrap();
+        assert!(data.node_coord_section.is_some());
+        assert!(data.fixed_edges_section.is_some());
+        assert_eq!(data.fixed_edges_section.unwrap(), vec![(1, 2)]);
+        assert_eq!(rest, "");
+
+        // Test erroneous notation for FIXED_EDGES_SECTION
+        let input = "FIXED_EDGES : \n1 2\n-1\nEOF";
+        let (data, _) = parse_data_section(input, &spec).unwrap();
+        assert_eq!(data.fixed_edges_section.unwrap(), vec![(1, 2)]);
+    }
+
+    #[test]
+    fn test_parse_data_section_unexpected_keyword() {
+        let spec = Specification {
+            name: "test".into(),
+            dtype: Type::TSP,
+            comment: vec![],
+            dimension: Some(2),
+            capacity: Some(0),
+            edge_weight_type: Some(EdgeWeightType::Euc2D),
+            edge_weight_format: None,
+            edge_data_format: None,
+            node_coord_type: None,
+            display_data_type: None,
+        };
+        let input = "UNKNOWN_SECTION\n1 2 3\nEOF";
+        assert!(parse_data_section(input, &spec).is_err());
+    }
+}
