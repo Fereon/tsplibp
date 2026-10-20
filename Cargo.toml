@@ -7,7 +7,7 @@ description = "A fast, ergonomic TSPLIB95 parser and distance calculator for Rus
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Fereon/tsplibp"
-keywords = ["tsp", "tsplib", "combinatorial-optimization", "cvrp", "routing"]
+keywords = ["tsp", "tsplib", "tsplib95", "cvrp", "routing"]
 categories = ["algorithms", "parser-implementations", "science"]
 exclude = ["instances/"]
 
