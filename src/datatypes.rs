@@ -387,3 +387,165 @@ impl Instance {
         self.data.tour_section.as_deref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_data() -> Data {
+        Data {
+            node_coord_section: None,
+            depot_section: None,
+            demand_section: None,
+            edge_data_section: None,
+            fixed_edges_section: None,
+            display_data_section: None,
+            tour_section: None,
+            edge_weight_section: None,
+        }
+    }
+
+    fn base_spec(dimension: Option<Integer>) -> Specification {
+        Specification {
+            name: "unit".into(),
+            dtype: Type::TSP,
+            comment: vec![],
+            dimension,
+            capacity: None,
+            edge_weight_type: Some(EdgeWeightType::Euc2D),
+            edge_weight_format: None,
+            edge_data_format: None,
+            node_coord_type: None,
+            display_data_type: None,
+        }
+    }
+
+    #[test]
+    fn test_dimension_validation() {
+        let inst_missing = Instance {
+            specification: base_spec(None),
+            data: empty_data(),
+        };
+        assert_eq!(inst_missing.dimension(), Err(TSPLibError::MissingDimension));
+
+        let inst_neg = Instance {
+            specification: base_spec(Some(-3)),
+            data: empty_data(),
+        };
+        assert!(matches!(
+            inst_neg.dimension(),
+            Err(TSPLibError::InvalidDimension(_))
+        ));
+
+        let inst_ok = Instance {
+            specification: base_spec(Some(4)),
+            data: empty_data(),
+        };
+        assert_eq!(inst_ok.dimension(), Ok(4));
+    }
+
+    #[test]
+    fn test_node_identifiers_2d_3d_and_fallback() {
+        // Fallback 1..=dimension
+        let inst_fallback = Instance {
+            specification: base_spec(Some(3)),
+            data: empty_data(),
+        };
+        assert_eq!(inst_fallback.node_identifiers(), Ok(vec![1, 2, 3]));
+
+        // 2D custom identifiers
+        let mut data_2d = empty_data();
+        data_2d.node_coord_section = Some(NodeCoordSection::TwodCoords(vec![
+            TwoDimensionalNode {
+                identifier: 10,
+                x_coordinate: 0.0,
+                y_coordinate: 0.0,
+            },
+            TwoDimensionalNode {
+                identifier: 20,
+                x_coordinate: 3.0,
+                y_coordinate: 4.0,
+            },
+        ]));
+        let inst_2d = Instance {
+            specification: base_spec(Some(2)),
+            data: data_2d,
+        };
+        assert_eq!(inst_2d.node_identifiers(), Ok(vec![10, 20]));
+
+        // 3D custom identifiers
+        let mut data_3d = empty_data();
+        data_3d.node_coord_section = Some(NodeCoordSection::ThreedCoords(vec![
+            ThreeDimensionalNode {
+                identifier: 7,
+                x_coordinate: 0.0,
+                y_coordinate: 0.0,
+                z_coordinate: 0.0,
+            },
+            ThreeDimensionalNode {
+                identifier: 9,
+                x_coordinate: 1.0,
+                y_coordinate: 2.0,
+                z_coordinate: 2.0,
+            },
+        ]));
+        let inst_3d = Instance {
+            specification: base_spec(Some(2)),
+            data: data_3d,
+        };
+        assert_eq!(inst_3d.node_identifiers(), Ok(vec![7, 9]));
+    }
+
+    #[test]
+    fn test_tour_validation_and_length_custom_ids() {
+        let mut data = empty_data();
+        data.node_coord_section = Some(NodeCoordSection::TwodCoords(vec![
+            TwoDimensionalNode {
+                identifier: 10,
+                x_coordinate: 0.0,
+                y_coordinate: 0.0,
+            },
+            TwoDimensionalNode {
+                identifier: 20,
+                x_coordinate: 3.0,
+                y_coordinate: 4.0,
+            },
+            TwoDimensionalNode {
+                identifier: 30,
+                x_coordinate: 0.0,
+                y_coordinate: 4.0,
+            },
+        ]));
+        data.tour_section = Some(vec![10, 20, 30]);
+        let inst = Instance {
+            specification: base_spec(Some(3)),
+            data,
+        };
+
+        assert_eq!(inst.tour(), Some(&[10, 20, 30][..]));
+        assert_eq!(inst.is_valid_tour(&[10, 20, 30]), Ok(true));
+        assert_eq!(inst.is_valid_tour(&[1, 2, 3]), Ok(false));
+        assert_eq!(inst.is_valid_tour(&[10, 20, 20]), Ok(false));
+        assert_eq!(inst.is_valid_tour(&[10, 20]), Ok(false));
+
+        assert_eq!(inst.tour_length(&[10, 20, 30]), Ok(5 + 3 + 4));
+        assert!(matches!(
+            inst.tour_length(&[]),
+            Err(TSPLibError::InvalidTour(_))
+        ));
+    }
+
+    #[test]
+    fn test_display_without_dimension() {
+        let spec = base_spec(None);
+        assert_eq!(spec.to_string(), "unit (TSP, dimension: None)");
+    }
+
+    #[test]
+    fn test_from_reader_in_memory() {
+        let content = b"NAME: mem\nTYPE: TOUR\nDIMENSION: 2\nTOUR_SECTION\n1 2 -1\nEOF";
+        let inst = Instance::from_reader(&content[..]).unwrap();
+        assert_eq!(inst.specification.name, "mem");
+        assert_eq!(inst.tour(), Some(&[1, 2][..]));
+    }
+}

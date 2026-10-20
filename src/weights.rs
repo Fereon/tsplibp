@@ -531,7 +531,7 @@ fn explicit_weight_by_index(
         }
         EdgeWeightFormat::UpperDiagRow => {
             let (r, c) = if i <= j { (i, j) } else { (j, i) };
-            r * dim - r * (r - 1) / 2 + (c - r)
+            r * dim - r.saturating_sub(1) * r / 2 + (c - r)
         }
         EdgeWeightFormat::LowerDiagRow => {
             let (r, c) = if i >= j { (i, j) } else { (j, i) };
@@ -551,7 +551,7 @@ fn explicit_weight_by_index(
         }
         EdgeWeightFormat::LowerDiagCol => {
             let (r, c) = if i >= j { (i, j) } else { (j, i) };
-            c * dim - c * (c - 1) / 2 + (r - c)
+            c * dim - c.saturating_sub(1) * c / 2 + (r - c)
         }
         EdgeWeightFormat::Function => {
             return Err(TSPLibError::UnsupportedWeightCalculation(
@@ -613,5 +613,333 @@ fn hcp_weight(
         Err(TSPLibError::WeightsNotAvailable(
             "no edge data found for HCP".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datatypes::{Data, EdgeDataFormat, Specification};
+
+    fn n2d(id: NodeIdentifier, x: f64, y: f64) -> TwoDimensionalNode {
+        TwoDimensionalNode {
+            identifier: id,
+            x_coordinate: x,
+            y_coordinate: y,
+        }
+    }
+
+    fn n3d(id: NodeIdentifier, x: f64, y: f64, z: f64) -> ThreeDimensionalNode {
+        ThreeDimensionalNode {
+            identifier: id,
+            x_coordinate: x,
+            y_coordinate: y,
+            z_coordinate: z,
+        }
+    }
+
+    #[test]
+    fn test_nint() {
+        assert_eq!(nint(0.0), 0);
+        assert_eq!(nint(0.49), 0);
+        assert_eq!(nint(0.5), 1);
+        assert_eq!(nint(2.5), 3);
+    }
+
+    #[test]
+    fn test_analytical_2d_and_3d_metrics() {
+        let a2 = n2d(1, 0.0, 0.0);
+        let b2 = n2d(2, 3.0, 4.0);
+        assert_eq!(distance_euc_2d(&a2, &b2), 5);
+        assert_eq!(distance_man_2d(&a2, &b2), 7);
+        assert_eq!(distance_max_2d(&a2, &b2), 4);
+        assert_eq!(distance_ceil_2d(&a2, &b2), 5);
+
+        // Non-integer Euclidean distance: sqrt(1^2 + 1^2) = 1.4142...
+        let c2 = n2d(3, 1.0, 1.0);
+        assert_eq!(distance_euc_2d(&a2, &c2), 1);
+        assert_eq!(distance_ceil_2d(&a2, &c2), 2);
+
+        // ATT metric:
+        // Case 1: rij = sqrt((10 + 0)/10) = 1.0 -> tij = 1, tij == rij -> 1
+        let att_exact = n2d(2, 3.0, 1.0);
+        assert_eq!(distance_att(&a2, &att_exact), 1);
+        // Case 2: rij = sqrt((3^2 + 4^2)/10) = sqrt(2.5) = 1.5811 -> tij = 2 >= rij -> 2
+        assert_eq!(distance_att(&a2, &b2), 2);
+        // Case 3: rij = sqrt((1^2 + 1^2)/10) = sqrt(0.2) = 0.4472 -> tij = 0 < rij -> 1
+        assert_eq!(distance_att(&a2, &c2), 1);
+
+        // GEO metric (including negative coordinates)
+        let g1 = n2d(1, 16.47, 96.10);
+        let g2 = n2d(2, -16.47, -94.44);
+        assert!(distance_geo(&g1, &g2) > 0);
+
+        // 3D metrics: (0,0,0) to (2,3,6) -> sqrt(4+9+36) = 7
+        let a3 = n3d(1, 0.0, 0.0, 0.0);
+        let b3 = n3d(2, 2.0, 3.0, 6.0);
+        assert_eq!(distance_euc_3d(&a3, &b3), 7);
+        assert_eq!(distance_man_3d(&a3, &b3), 11);
+        assert_eq!(distance_max_3d(&a3, &b3), 6);
+    }
+
+    #[test]
+    fn test_all_3d_edge_weight_types_and_custom_ids() {
+        for (ew_type, expected) in [
+            (EdgeWeightType::Euc3D, 7),
+            (EdgeWeightType::Man3D, 11),
+            (EdgeWeightType::Max3D, 6),
+        ] {
+            let inst = Instance {
+                specification: Specification {
+                    name: "3d".into(),
+                    dtype: Type::TSP,
+                    comment: vec![],
+                    dimension: Some(2),
+                    capacity: None,
+                    edge_weight_type: Some(ew_type),
+                    edge_weight_format: None,
+                    edge_data_format: None,
+                    node_coord_type: None,
+                    display_data_type: None,
+                },
+                data: Data {
+                    node_coord_section: Some(NodeCoordSection::ThreedCoords(vec![
+                        n3d(10, 0.0, 0.0, 0.0),
+                        n3d(20, 2.0, 3.0, 6.0),
+                    ])),
+                    depot_section: None,
+                    demand_section: None,
+                    edge_data_section: None,
+                    fixed_edges_section: None,
+                    display_data_section: None,
+                    tour_section: None,
+                    edge_weight_section: None,
+                },
+            };
+
+            // Direct and WeightCalculator paths
+            assert_eq!(inst.weight(10, 20), Ok(expected));
+            assert_eq!(inst.weight(10, 10), Ok(0));
+            assert_eq!(inst.weight(99, 10), Err(TSPLibError::NodeNotFound(99)));
+            let calc = inst.weight_calculator().unwrap();
+            assert_eq!(calc.weight(10, 20), Ok(expected));
+            assert_eq!(calc.weight(99, 10), Err(TSPLibError::NodeNotFound(99)));
+        }
+    }
+
+    #[test]
+    fn test_all_explicit_matrix_formats() {
+        // 3x3 symmetric test matrix:
+        //   [ 0, 10, 20 ]
+        //   [10,  0, 30 ]
+        //   [20, 30,  0 ]
+        let cases = [
+            (
+                EdgeWeightFormat::FullMatrix,
+                vec![0, 10, 20, 10, 0, 30, 20, 30, 0],
+            ),
+            (EdgeWeightFormat::UpperRow, vec![10, 20, 30]),
+            (EdgeWeightFormat::LowerRow, vec![10, 20, 30]),
+            (EdgeWeightFormat::UpperDiagRow, vec![0, 10, 20, 0, 30, 0]),
+            (EdgeWeightFormat::LowerDiagRow, vec![0, 10, 0, 20, 30, 0]),
+            (EdgeWeightFormat::UpperCol, vec![10, 20, 30]),
+            (EdgeWeightFormat::LowerCol, vec![10, 20, 30]),
+            (EdgeWeightFormat::UpperDiagCol, vec![0, 10, 0, 20, 30, 0]),
+            (EdgeWeightFormat::LowerDiagCol, vec![0, 10, 20, 0, 30, 0]),
+        ];
+
+        for (fmt, weights) in cases {
+            let inst = Instance {
+                specification: Specification {
+                    name: "mat".into(),
+                    dtype: Type::TSP,
+                    comment: vec![],
+                    dimension: Some(3),
+                    capacity: None,
+                    edge_weight_type: Some(EdgeWeightType::Explicit),
+                    edge_weight_format: Some(fmt),
+                    edge_data_format: None,
+                    node_coord_type: None,
+                    display_data_type: None,
+                },
+                data: Data {
+                    node_coord_section: None,
+                    depot_section: None,
+                    demand_section: None,
+                    edge_data_section: None,
+                    fixed_edges_section: None,
+                    display_data_section: None,
+                    tour_section: None,
+                    edge_weight_section: Some(weights),
+                },
+            };
+
+            let expected = vec![vec![0, 10, 20], vec![10, 0, 30], vec![20, 30, 0]];
+            assert_eq!(inst.distance_matrix().unwrap(), expected, "format: {fmt:?}");
+            assert_eq!(inst.weight(1, 2), Ok(10));
+            assert_eq!(inst.weight(2, 1), Ok(10));
+            assert_eq!(inst.weight(1, 3), Ok(20));
+            assert_eq!(inst.weight(3, 1), Ok(20));
+            assert_eq!(inst.weight(2, 3), Ok(30));
+            assert_eq!(inst.weight(3, 2), Ok(30));
+        }
+    }
+
+    #[test]
+    fn test_hcp_edge_list_and_adj_list() {
+        let content_adj = "NAME: hcp_adj\nTYPE: HCP\nDIMENSION: 3\nEDGE_DATA_FORMAT: ADJ_LIST\nEDGE_DATA_SECTION\n1 2 -1\n2 3 -1\n-1\nEOF";
+        let inst_adj: Instance = content_adj.parse().unwrap();
+        assert_eq!(
+            inst_adj.specification.edge_data_format,
+            Some(EdgeDataFormat::AdjList)
+        );
+        // Direct lookup (without pre-built HashSet)
+        assert_eq!(inst_adj.weight(1, 2), Ok(1));
+        assert_eq!(inst_adj.weight(2, 1), Ok(1));
+        assert_eq!(inst_adj.weight(2, 3), Ok(1));
+        assert_eq!(inst_adj.weight(1, 3), Ok(HCP_NON_EDGE_WEIGHT));
+        // Cached lookup (with pre-built HashSet)
+        let calc = inst_adj.weight_calculator().unwrap();
+        assert_eq!(calc.weight(1, 2), Ok(1));
+        assert_eq!(calc.weight(2, 1), Ok(1));
+        assert_eq!(calc.weight(1, 3), Ok(HCP_NON_EDGE_WEIGHT));
+    }
+
+    #[test]
+    fn test_weight_error_branches() {
+        let base_data = Data {
+            node_coord_section: None,
+            depot_section: None,
+            demand_section: None,
+            edge_data_section: None,
+            fixed_edges_section: None,
+            display_data_section: None,
+            tour_section: None,
+            edge_weight_section: None,
+        };
+
+        // Missing 2D coords
+        let inst_no_2d = Instance {
+            specification: Specification {
+                name: "err".into(),
+                dtype: Type::TSP,
+                comment: vec![],
+                dimension: Some(2),
+                capacity: None,
+                edge_weight_type: Some(EdgeWeightType::Euc2D),
+                edge_weight_format: None,
+                edge_data_format: None,
+                node_coord_type: None,
+                display_data_type: None,
+            },
+            data: base_data.clone(),
+        };
+        assert!(matches!(
+            inst_no_2d.weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
+        assert!(matches!(
+            inst_no_2d.weight_calculator().unwrap().weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
+
+        // Missing 3D coords
+        let inst_no_3d = Instance {
+            specification: Specification {
+                edge_weight_type: Some(EdgeWeightType::Euc3D),
+                ..inst_no_2d.specification.clone()
+            },
+            data: base_data.clone(),
+        };
+        assert!(matches!(
+            inst_no_3d.weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
+        assert!(matches!(
+            inst_no_3d.weight_calculator().unwrap().weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
+
+        // Unsupported XRay1 without explicit section, and fallback when explicit section exists
+        let inst_xray = Instance {
+            specification: Specification {
+                edge_weight_type: Some(EdgeWeightType::XRay1),
+                ..inst_no_2d.specification.clone()
+            },
+            data: base_data.clone(),
+        };
+        assert!(matches!(
+            inst_xray.weight(1, 2),
+            Err(TSPLibError::UnsupportedWeightCalculation(_))
+        ));
+        assert!(matches!(
+            inst_xray.weight_calculator().unwrap().weight(1, 2),
+            Err(TSPLibError::UnsupportedWeightCalculation(_))
+        ));
+
+        let inst_xray_explicit = Instance {
+            specification: Specification {
+                edge_weight_type: Some(EdgeWeightType::XRay1),
+                edge_weight_format: Some(EdgeWeightFormat::FullMatrix),
+                ..inst_no_2d.specification.clone()
+            },
+            data: Data {
+                edge_weight_section: Some(vec![0, 42, 42, 0]),
+                ..base_data.clone()
+            },
+        };
+        assert_eq!(inst_xray_explicit.weight(1, 2), Ok(42));
+        assert_eq!(
+            inst_xray_explicit.weight_calculator().unwrap().weight(1, 2),
+            Ok(42)
+        );
+
+        // Explicit with Function format
+        let inst_func = Instance {
+            specification: Specification {
+                edge_weight_type: Some(EdgeWeightType::Explicit),
+                edge_weight_format: Some(EdgeWeightFormat::Function),
+                ..inst_no_2d.specification.clone()
+            },
+            data: Data {
+                edge_weight_section: Some(vec![]),
+                ..base_data.clone()
+            },
+        };
+        assert!(matches!(
+            inst_func.weight(1, 2),
+            Err(TSPLibError::UnsupportedWeightCalculation(_))
+        ));
+
+        // Truncated explicit matrix (index out of bounds)
+        let inst_short = Instance {
+            specification: Specification {
+                edge_weight_type: Some(EdgeWeightType::Explicit),
+                edge_weight_format: Some(EdgeWeightFormat::FullMatrix),
+                ..inst_no_2d.specification.clone()
+            },
+            data: Data {
+                edge_weight_section: Some(vec![0]),
+                ..base_data.clone()
+            },
+        };
+        assert!(matches!(
+            inst_short.weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
+
+        // HCP without edge_data_section
+        let inst_hcp_empty = Instance {
+            specification: Specification {
+                dtype: Type::HCP,
+                edge_weight_type: Some(EdgeWeightType::Explicit),
+                ..inst_no_2d.specification
+            },
+            data: base_data,
+        };
+        assert!(matches!(
+            inst_hcp_empty.weight(1, 2),
+            Err(TSPLibError::WeightsNotAvailable(_))
+        ));
     }
 }

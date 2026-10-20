@@ -137,6 +137,16 @@ mod test {
     }
 
     #[test]
+    fn test_parsing_incomplete_after_eof() {
+        let input =
+            "NAME: trailing\nTYPE: TOUR\nDIMENSION: 1\nTOUR_SECTION\n1 -1\nEOF\ntrailing_garbage";
+        assert_eq!(
+            input.parse::<Instance>(),
+            Err(TSPLibError::ParsingIncomplete("trailing_garbage".into()))
+        );
+    }
+
+    #[test]
     fn test_parse_br17() {
         let input = "NAME:  br17
 TYPE: ATSP

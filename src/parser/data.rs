@@ -497,7 +497,7 @@ mod test {
         assert_eq!(rest, "");
 
         let input_eof = "1 2 3\nEOF";
-        let (v, rest) = parse_tour_section(input_eof, Some(3)).unwrap();
+        let (v, rest) = parse_tour_section(input_eof, None).unwrap();
         assert_eq!(v, vec![1, 2, 3]);
         assert_eq!(rest, "EOF");
     }
@@ -515,6 +515,19 @@ mod test {
         assert_eq!(v, vec![1, 2, 3, 4]);
         assert_eq!(rest, "");
 
+        // Default to FullMatrix when EdgeWeightType::Explicit and format is None
+        let (v, rest) =
+            parse_edge_weight_section(input, Some(2), Some(EdgeWeightType::Explicit), None)
+                .unwrap();
+        assert_eq!(v, vec![1, 2, 3, 4]);
+        assert_eq!(rest, "");
+
+        // Missing format when not Explicit
+        assert_eq!(
+            parse_edge_weight_section(input, Some(2), None, None),
+            Err(TSPLibError::MissingEdgeWeightFormat)
+        );
+
         let input = "1 2 3";
         let (v, rest) = parse_edge_weight_section(
             input,
@@ -525,6 +538,27 @@ mod test {
         .unwrap();
         // n=3, n*(n-1)/2 = 3*2/2 = 3
         assert_eq!(v, vec![1, 2, 3]);
+        assert_eq!(rest, "");
+
+        let input_diag = "1 2 3 4 5 6";
+        let (v, rest) = parse_edge_weight_section(
+            input_diag,
+            Some(3),
+            Some(EdgeWeightType::Explicit),
+            Some(EdgeWeightFormat::LowerDiagRow),
+        )
+        .unwrap();
+        assert_eq!(v, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(rest, "");
+
+        let (v, rest) = parse_edge_weight_section(
+            "",
+            Some(3),
+            Some(EdgeWeightType::Euc2D),
+            Some(EdgeWeightFormat::Function),
+        )
+        .unwrap();
+        assert!(v.is_empty());
         assert_eq!(rest, "");
     }
 
@@ -581,15 +615,22 @@ mod test {
     fn test_parse_node_coord_section_errors() {
         let input = "1 1.0 2.0";
         assert!(parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None).is_err());
+        assert!(
+            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), Some(-1)).is_err()
+        );
         assert!(parse_node_coord_section(input, Some(NodeCoordType::NoCoords), Some(1)).is_err());
         let bad_input = "1 1.0";
-        assert!(parse_node_coord_section(bad_input, None, Some(1)).is_err());
+        assert_eq!(
+            parse_node_coord_section(bad_input, None, Some(1)),
+            Err(TSPLibError::UnknownNodeCoordType)
+        );
     }
 
     #[test]
-    fn test_parse_demand_section_error() {
+    fn test_parse_demand_and_display_section_errors() {
         let input = "1 10";
         assert!(parse_demand_section(input, None).is_err());
+        assert!(parse_display_data_section("1 1.0 2.0", None).is_err());
     }
 
     #[test]
@@ -599,24 +640,38 @@ mod test {
     }
 
     #[test]
-    fn test_parse_data_section_complex() {
+    fn test_parse_data_section_all_sections() {
         let spec = Specification {
             name: "test".into(),
             dtype: Type::TSP,
             comment: vec![],
             dimension: Some(2),
-            capacity: Some(0),
-            edge_weight_type: Some(EdgeWeightType::Euc2D),
+            capacity: Some(10),
+            edge_weight_type: Some(EdgeWeightType::Explicit),
             edge_weight_format: Some(EdgeWeightFormat::FullMatrix),
             edge_data_format: Some(EdgeDataFormat::EdgeList),
             node_coord_type: Some(NodeCoordType::TwodCoords),
-            display_data_type: Some(DisplayDataType::NoDisplay),
+            display_data_type: Some(DisplayDataType::TwodDisplay),
         };
-        let input = "NODE_COORD_SECTION\n1 1.0 2.0\n2 3.0 4.0\nFIXED_EDGES_SECTION\n1 2\n-1\nEOF";
+        let input = "\
+NODE_COORD_SECTION\n1 1.0 2.0\n2 3.0 4.0\n\
+DISPLAY_DATA_SECTION\n1 10.0 20.0\n2 30.0 40.0\n\
+DEMAND_SECTION\n1 0\n2 5\n\
+DEPOT_SECTION\n1 -1\n\
+EDGE_DATA_SECTION\n1 2 -1\n\
+FIXED_EDGES_SECTION\n1 2 -1\n\
+EDGE_WEIGHT_SECTION\n0 7 7 0\n\
+TOUR_SECTION\n1 2 -1\n\
+EOF";
         let (data, rest) = parse_data_section(input, &spec).unwrap();
         assert!(data.node_coord_section.is_some());
+        assert!(data.display_data_section.is_some());
+        assert!(data.demand_section.is_some());
+        assert!(data.depot_section.is_some());
+        assert!(data.edge_data_section.is_some());
         assert!(data.fixed_edges_section.is_some());
-        assert_eq!(data.fixed_edges_section.unwrap(), vec![(1, 2)]);
+        assert_eq!(data.edge_weight_section, Some(vec![0, 7, 7, 0]));
+        assert_eq!(data.tour_section, Some(vec![1, 2]));
         assert_eq!(rest, "");
 
         // Test erroneous notation for FIXED_EDGES_SECTION

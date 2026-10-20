@@ -240,6 +240,14 @@ mod tests {
     #[test]
     fn test_parse_dtype() {
         assert_eq!(parse_dtype("TSP").unwrap(), (Type::TSP, ""));
+        assert_eq!(
+            parse_dtype("TSP (M.~Hofmeister)\nrest").unwrap(),
+            (Type::TSP, "rest")
+        );
+        assert_eq!(parse_dtype("ATSP").unwrap(), (Type::ATSP, ""));
+        assert_eq!(parse_dtype("SOP").unwrap(), (Type::SOP, ""));
+        assert_eq!(parse_dtype("HCP").unwrap(), (Type::HCP, ""));
+        assert_eq!(parse_dtype("CVRP").unwrap(), (Type::CVRP, ""));
         assert_eq!(parse_dtype("TOUR").unwrap(), (Type::Tour, ""));
         assert!(parse_dtype("INVALID").is_err());
     }
@@ -257,31 +265,49 @@ mod tests {
         assert_eq!(parse_capacity("100").unwrap(), (100, ""));
         assert_eq!(parse_capacity("0").unwrap(), (0, ""));
         assert!(parse_capacity("-1").is_err());
+        assert!(parse_capacity("abc").is_err());
     }
 
     #[test]
     fn test_parse_edge_weight_type() {
-        assert_eq!(
-            parse_edge_weight_type("EUC_2D").unwrap(),
-            (EdgeWeightType::Euc2D, "")
-        );
-        assert_eq!(
-            parse_edge_weight_type("GEO").unwrap(),
-            (EdgeWeightType::Geo, "")
-        );
+        let cases = [
+            ("EXPLICIT", EdgeWeightType::Explicit),
+            ("EUC_2D", EdgeWeightType::Euc2D),
+            ("EUC_3D", EdgeWeightType::Euc3D),
+            ("MAX_2D", EdgeWeightType::Max2D),
+            ("MAX_3D", EdgeWeightType::Max3D),
+            ("MAN_2D", EdgeWeightType::Man2D),
+            ("MAN_3D", EdgeWeightType::Man3D),
+            ("CEIL_2D", EdgeWeightType::Ceil2D),
+            ("GEO", EdgeWeightType::Geo),
+            ("ATT", EdgeWeightType::Att),
+            ("XRAY1", EdgeWeightType::XRay1),
+            ("XRAY2", EdgeWeightType::XRay2),
+            ("SPECIAL", EdgeWeightType::Special),
+        ];
+        for (s, expected) in cases {
+            assert_eq!(parse_edge_weight_type(s).unwrap(), (expected, ""));
+        }
         assert!(parse_edge_weight_type("INVALID").is_err());
     }
 
     #[test]
     fn test_parse_edge_weight_format() {
-        assert_eq!(
-            parse_edge_weight_format("FULL_MATRIX").unwrap(),
-            (EdgeWeightFormat::FullMatrix, "")
-        );
-        assert_eq!(
-            parse_edge_weight_format("UPPER_ROW").unwrap(),
-            (EdgeWeightFormat::UpperRow, "")
-        );
+        let cases = [
+            ("FUNCTION", EdgeWeightFormat::Function),
+            ("FULL_MATRIX", EdgeWeightFormat::FullMatrix),
+            ("UPPER_ROW", EdgeWeightFormat::UpperRow),
+            ("LOWER_ROW", EdgeWeightFormat::LowerRow),
+            ("UPPER_DIAG_ROW", EdgeWeightFormat::UpperDiagRow),
+            ("LOWER_DIAG_ROW", EdgeWeightFormat::LowerDiagRow),
+            ("UPPER_COL", EdgeWeightFormat::UpperCol),
+            ("LOWER_COL", EdgeWeightFormat::LowerCol),
+            ("UPPER_DIAG_COL", EdgeWeightFormat::UpperDiagCol),
+            ("LOWER_DIAG_COL", EdgeWeightFormat::LowerDiagCol),
+        ];
+        for (s, expected) in cases {
+            assert_eq!(parse_edge_weight_format(s).unwrap(), (expected, ""));
+        }
         assert!(parse_edge_weight_format("INVALID").is_err());
     }
 
@@ -305,6 +331,10 @@ mod tests {
             (NodeCoordType::TwodCoords, "")
         );
         assert_eq!(
+            parse_node_coord_type("THREED_COORDS").unwrap(),
+            (NodeCoordType::ThreedCoords, "")
+        );
+        assert_eq!(
             parse_node_coord_type("NO_COORDS").unwrap(),
             (NodeCoordType::NoCoords, "")
         );
@@ -316,6 +346,10 @@ mod tests {
         assert_eq!(
             parse_display_data_type("COORD_DISPLAY").unwrap(),
             (DisplayDataType::CoordDisplay, "")
+        );
+        assert_eq!(
+            parse_display_data_type("TWOD_DISPLAY").unwrap(),
+            (DisplayDataType::TwodDisplay, "")
         );
         assert_eq!(
             parse_display_data_type("NO_DISPLAY").unwrap(),
@@ -339,5 +373,17 @@ mod tests {
         assert_eq!(spec.node_coord_type, Some(NodeCoordType::TwodCoords));
         assert_eq!(spec.display_data_type, Some(DisplayDataType::NoDisplay));
         assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_parse_specification_missing_required_fields() {
+        assert_eq!(
+            parse_specification("TYPE: TSP\nEOF"),
+            Err(TSPLibError::MissingName)
+        );
+        assert_eq!(
+            parse_specification("NAME: only_name\nEOF"),
+            Err(TSPLibError::MissingType)
+        );
     }
 }
