@@ -1,12 +1,24 @@
 use crate::{
     datatypes::{
-        Data, Demand, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight, EdgeWeightFormat, Integer,
-        NodeCoordSection, NodeCoordType, NodeIdentifier, Specification, ThreeDimensionalNode,
-        TwoDimensionalNode,
+        Data, Demand, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight, EdgeWeightFormat,
+        EdgeWeightType, Integer, NodeCoordSection, NodeCoordType, NodeIdentifier, Specification,
+        ThreeDimensionalNode, TwoDimensionalNode,
     },
     error::TSPLibError,
     parser::{parse_integer, parse_real, split_once_newline, split_once_whitespace},
 };
+
+fn parse_positive_dimension(dimension: Option<Integer>) -> Result<usize, TSPLibError> {
+    let dim = dimension.ok_or(TSPLibError::MissingDimension)?;
+    if dim <= 0 {
+        return Err(TSPLibError::InvalidDimension(Box::new(
+            TSPLibError::InvalidIntegerFormat(dim.to_string()),
+        )));
+    }
+    usize::try_from(dim).map_err(|_| {
+        TSPLibError::InvalidDimension(Box::new(TSPLibError::InvalidIntegerFormat(dim.to_string())))
+    })
+}
 
 fn parse_node_coord_section(
     input: &str,
@@ -21,18 +33,16 @@ fn parse_node_coord_section(
         match count {
             3 => NodeCoordType::TwodCoords,
             4 => NodeCoordType::ThreedCoords,
-            _ => return Err(TSPLibError::UnkownNodeCoordType),
+            _ => return Err(TSPLibError::UnknownNodeCoordType),
         }
     };
 
-    let Some(dimension) = dimension else {
-        return Err(TSPLibError::MissingDimension);
-    };
+    let dimension = parse_positive_dimension(dimension)?;
 
     let mut rest = input;
     match node_coord_type {
         NodeCoordType::TwodCoords => {
-            let mut coords = Vec::with_capacity(dimension as usize);
+            let mut coords = Vec::with_capacity(dimension);
             for _ in 0..dimension {
                 let (id, r) = parse_integer(rest)?;
                 let (x, r) = parse_real(r)?;
@@ -47,7 +57,7 @@ fn parse_node_coord_section(
             Ok((NodeCoordSection::TwodCoords(coords), rest))
         }
         NodeCoordType::ThreedCoords => {
-            let mut coords = Vec::with_capacity(dimension as usize);
+            let mut coords = Vec::with_capacity(dimension);
             for _ in 0..dimension {
                 let (id, r) = parse_integer(rest)?;
                 let (x, r) = parse_real(r)?;
@@ -85,12 +95,10 @@ fn parse_demand_section(
     input: &str,
     dimension: Option<Integer>,
 ) -> Result<(Vec<Demand>, &str), TSPLibError> {
-    let Some(dimension) = dimension else {
-        return Err(TSPLibError::MissingDimension);
-    };
+    let dimension = parse_positive_dimension(dimension)?;
 
     let mut rest = input;
-    let mut demands = Vec::with_capacity(dimension as usize);
+    let mut demands = Vec::with_capacity(dimension);
     for _ in 0..dimension {
         let (id, r) = parse_integer(rest)?;
         let (demand, r) = parse_integer(r)?;
@@ -169,12 +177,10 @@ fn parse_display_data_section(
     input: &str,
     dimension: Option<Integer>,
 ) -> Result<(Vec<TwoDimensionalNode>, &str), TSPLibError> {
-    let Some(dimension) = dimension else {
-        return Err(TSPLibError::MissingDimension);
-    };
+    let dimension = parse_positive_dimension(dimension)?;
 
     let mut rest = input;
-    let mut display_data = Vec::with_capacity(dimension as usize);
+    let mut display_data = Vec::with_capacity(dimension);
     for _ in 0..dimension {
         let (id, r) = parse_integer(rest)?;
         let (x, r) = parse_real(r)?;
@@ -195,13 +201,18 @@ fn parse_tour_section(
 ) -> Result<(Vec<NodeIdentifier>, &str), TSPLibError> {
     let mut rest = input;
 
-    let mut tour = if let Some(dimension) = dimension {
-        Vec::with_capacity(dimension as usize)
+    let mut tour = if let Ok(dimension) = parse_positive_dimension(dimension) {
+        Vec::with_capacity(dimension)
     } else {
         Vec::new()
     };
 
     loop {
+        let trimmed = rest.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with("EOF") {
+            rest = trimmed;
+            break;
+        }
         let (id, r) = parse_integer(rest)?;
         rest = r;
         if id == -1 {
@@ -215,10 +226,13 @@ fn parse_tour_section(
 fn parse_edge_weight_section(
     input: &str,
     dimension: Option<Integer>,
+    edge_weight_type: Option<EdgeWeightType>,
     edge_weight_format: Option<EdgeWeightFormat>,
 ) -> Result<(Vec<EdgeWeight>, &str), TSPLibError> {
-    let Some(edge_weight_format) = edge_weight_format else {
-        return Err(TSPLibError::MissingEdgeWeightFormat);
+    let edge_weight_format = match edge_weight_format {
+        Some(fmt) => fmt,
+        None if edge_weight_type == Some(EdgeWeightType::Explicit) => EdgeWeightFormat::FullMatrix,
+        None => return Err(TSPLibError::MissingEdgeWeightFormat),
     };
 
     // Some SOP instances contain additional redundant data
@@ -232,11 +246,7 @@ fn parse_edge_weight_section(
         input
     };
 
-    let Some(dimension) = dimension else {
-        return Err(TSPLibError::MissingDimension);
-    };
-
-    let n = dimension as usize;
+    let n = parse_positive_dimension(dimension)?;
     let count = match edge_weight_format {
         EdgeWeightFormat::FullMatrix => n * n,
         EdgeWeightFormat::UpperRow
@@ -327,6 +337,7 @@ pub fn parse_data_section<'a>(
                 let (value, r) = parse_edge_weight_section(
                     rest,
                     specification.dimension,
+                    specification.edge_weight_type,
                     specification.edge_weight_format,
                 )?;
                 edge_weight_section = Some(value);
@@ -484,19 +495,34 @@ mod test {
         let (v, rest) = parse_tour_section(input, Some(5)).unwrap();
         assert_eq!(v, vec![1, 2, 3, 4, 5]);
         assert_eq!(rest, "");
+
+        let input_eof = "1 2 3\nEOF";
+        let (v, rest) = parse_tour_section(input_eof, Some(3)).unwrap();
+        assert_eq!(v, vec![1, 2, 3]);
+        assert_eq!(rest, "EOF");
     }
 
     #[test]
     fn test_parse_edge_weight_section() {
         let input = "1 2 3 4";
-        let (v, rest) =
-            parse_edge_weight_section(input, Some(2), Some(EdgeWeightFormat::FullMatrix)).unwrap();
+        let (v, rest) = parse_edge_weight_section(
+            input,
+            Some(2),
+            Some(EdgeWeightType::Explicit),
+            Some(EdgeWeightFormat::FullMatrix),
+        )
+        .unwrap();
         assert_eq!(v, vec![1, 2, 3, 4]);
         assert_eq!(rest, "");
 
         let input = "1 2 3";
-        let (v, rest) =
-            parse_edge_weight_section(input, Some(3), Some(EdgeWeightFormat::UpperRow)).unwrap();
+        let (v, rest) = parse_edge_weight_section(
+            input,
+            Some(3),
+            Some(EdgeWeightType::Explicit),
+            Some(EdgeWeightFormat::UpperRow),
+        )
+        .unwrap();
         // n=3, n*(n-1)/2 = 3*2/2 = 3
         assert_eq!(v, vec![1, 2, 3]);
         assert_eq!(rest, "");

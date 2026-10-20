@@ -9,7 +9,7 @@
 //! ```
 
 use std::env;
-use tsplibp::Instance;
+use tsplibp::{Instance, Integer};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(ref demands) = instance.data.demand_section {
-        let total_demand: i32 = demands.iter().map(|&(_, d)| d).sum();
+        let total_demand: Integer = demands.iter().map(|&(_, d)| d).sum();
         println!("Total Demand:     {}", total_demand);
         println!("Sample Demands (first 5):");
         for &(node, demand) in demands.iter().take(5) {

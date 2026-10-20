@@ -3,10 +3,10 @@ use std::{fmt::Display, io::Read, path::Path};
 use crate::{error::TSPLibError, weights::WeightCalculator};
 
 /// Integer type used for coordinates, counts, dimensions and weights in TSPLIB.
-pub type Integer = i32;
+pub type Integer = i64;
 
 /// Floating-point real type used for node coordinates.
-pub type Real = f32;
+pub type Real = f64;
 
 /// Node identifier type. By convention in TSPLIB, node IDs are typically 1-indexed integers.
 pub type NodeIdentifier = Integer;
@@ -262,12 +262,23 @@ impl Instance {
     /// Return the dimension of the problem (number of nodes).
     ///
     /// # Errors
-    /// Returns [`TSPLibError::MissingDimension`] if the dimension is not specified in the header.
+    /// Returns [`TSPLibError::MissingDimension`] if the dimension is not specified in the header,
+    /// or [`TSPLibError::InvalidDimension`] if the dimension is not positive.
     pub fn dimension(&self) -> Result<usize, TSPLibError> {
-        self.specification
+        let dim = self
+            .specification
             .dimension
-            .map(|d| d as usize)
-            .ok_or(TSPLibError::MissingDimension)
+            .ok_or(TSPLibError::MissingDimension)?;
+        if dim <= 0 {
+            return Err(TSPLibError::InvalidDimension(Box::new(
+                TSPLibError::InvalidIntegerFormat(dim.to_string()),
+            )));
+        }
+        usize::try_from(dim).map_err(|_| {
+            TSPLibError::InvalidDimension(Box::new(TSPLibError::InvalidIntegerFormat(
+                dim.to_string(),
+            )))
+        })
     }
 
     /// Return an ordered list of all node identifiers in this instance.
@@ -289,6 +300,11 @@ impl Instance {
         Ok((1..=(dim as NodeIdentifier)).collect())
     }
 
+    /// Create a [`WeightCalculator`] for repeated $O(1)$ distance queries on this instance.
+    pub fn weight_calculator(&self) -> Result<WeightCalculator<'_>, TSPLibError> {
+        WeightCalculator::new(self)
+    }
+
     /// Calculate or look up the edge weight between two nodes `u` and `v`.
     ///
     /// Automatically handles both explicit weight matrices (in any standard TSPLIB format)
@@ -297,8 +313,7 @@ impl Instance {
     /// # Errors
     /// Returns a [`TSPLibError`] if either node is not found, or if weights cannot be computed.
     pub fn weight(&self, u: NodeIdentifier, v: NodeIdentifier) -> Result<EdgeWeight, TSPLibError> {
-        let calculator = WeightCalculator::new(self)?;
-        calculator.weight(u, v)
+        crate::weights::weight_direct(self, u, v)
     }
 
     /// Precompute and return a full `dimension x dimension` distance matrix.
@@ -335,10 +350,11 @@ impl Instance {
         let mut total_length: EdgeWeight = 0;
 
         for window in tour.windows(2) {
-            total_length += calculator.weight(window[0], window[1])?;
+            total_length = total_length.saturating_add(calculator.weight(window[0], window[1])?);
         }
         // Return edge from last node to first node
-        total_length += calculator.weight(tour[tour.len() - 1], tour[0])?;
+        total_length =
+            total_length.saturating_add(calculator.weight(tour[tour.len() - 1], tour[0])?);
 
         Ok(total_length)
     }

@@ -63,8 +63,9 @@ mod parser;
 pub mod weights;
 
 pub use datatypes::{
-    DisplayDataType, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight, EdgeWeightFormat,
-    EdgeWeightType, Instance, NodeCoordSection, NodeCoordType, NodeIdentifier, Specification, Type,
+    Data, Demand, DisplayDataType, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight,
+    EdgeWeightFormat, EdgeWeightType, Instance, Integer, NodeCoordSection, NodeCoordType,
+    NodeIdentifier, Real, Specification, ThreeDimensionalNode, TwoDimensionalNode, Type,
 };
 pub use error::TSPLibError;
 pub use weights::WeightCalculator;

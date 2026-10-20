@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use tsplibp::{self, EdgeWeight, Instance, TSPLibError};
+use tsplibp::{self, Instance, TSPLibError, weights::HCP_NON_EDGE_WEIGHT};
 
 fn parse_files_to_instances(path: &str) {
     let path = Path::new(path);
@@ -217,5 +217,29 @@ fn test_hcp_weights() {
     let instance = Instance::from_file("instances/hcp/alb1000.hcp").unwrap();
     // Connected nodes have weight 1
     let val = instance.weight(1, 2).unwrap();
-    assert!(val == 1 || val == EdgeWeight::MAX / 2);
+    assert!(val == 1 || val == HCP_NON_EDGE_WEIGHT);
+
+    // Check optimal HCP tour has length equal to dimension (1000 edges of weight 1)
+    let opt_tour_inst = Instance::from_file("instances/hcp/alb1000.opt.tour").unwrap();
+    let tour = opt_tour_inst.tour().unwrap();
+    assert!(instance.is_valid_tour(tour).unwrap());
+    assert_eq!(instance.tour_length(tour).unwrap(), 1000);
+}
+
+#[test]
+fn test_f64_precision_and_geo_clamp() {
+    // High-precision coordinates from usa13509 (9 significant digits)
+    let instance = Instance::from_file("instances/tsp/usa13509.tsp").unwrap();
+    if let Some(tsplibp::NodeCoordSection::TwodCoords(ref nodes)) = instance.data.node_coord_section
+    {
+        assert!((nodes[0].x_coordinate - 245552.778).abs() < 1e-9);
+        assert!((nodes[0].y_coordinate - 817827.778).abs() < 1e-9);
+    } else {
+        panic!("expected 2D coords");
+    }
+
+    // Distinct nodes with identical GEO coordinates must not produce NaN via acos()
+    let geo_dup = "NAME: geo_dup\nTYPE: TSP\nDIMENSION: 2\nEDGE_WEIGHT_TYPE: GEO\nNODE_COORD_SECTION\n1 16.47 96.10\n2 16.47 96.10\nEOF";
+    let inst: Instance = geo_dup.parse().unwrap();
+    assert_eq!(inst.weight(1, 2).unwrap(), 1);
 }

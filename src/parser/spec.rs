@@ -40,11 +40,25 @@ fn parse_comment(input: &str) -> Result<(String, &str), TSPLibError> {
 }
 
 fn parse_dimension(input: &str) -> Result<(Integer, &str), TSPLibError> {
-    parse_integer(input).map_err(|err| TSPLibError::InvalidDimension(err.into()))
+    let (dim, rest) =
+        parse_integer(input).map_err(|err| TSPLibError::InvalidDimension(err.into()))?;
+    if dim <= 0 {
+        return Err(TSPLibError::InvalidDimension(Box::new(
+            TSPLibError::InvalidIntegerFormat(dim.to_string()),
+        )));
+    }
+    Ok((dim, rest))
 }
 
 fn parse_capacity(input: &str) -> Result<(Integer, &str), TSPLibError> {
-    parse_integer(input).map_err(|err| TSPLibError::InvalidCapacity(err.into()))
+    let (cap, rest) =
+        parse_integer(input).map_err(|err| TSPLibError::InvalidCapacity(err.into()))?;
+    if cap < 0 {
+        return Err(TSPLibError::InvalidCapacity(Box::new(
+            TSPLibError::InvalidIntegerFormat(cap.to_string()),
+        )));
+    }
+    Ok((cap, rest))
 }
 
 fn parse_edge_weight_type(input: &str) -> Result<(EdgeWeightType, &str), TSPLibError> {
@@ -130,11 +144,35 @@ pub fn parse_specification(input: &str) -> Result<(Specification, &str), TSPLibE
     let mut node_coord_type = None;
     let mut display_data_type = None;
 
-    let mut keyword;
     let mut rest = input.trim_start();
     loop {
         let old_rest = rest;
-        (keyword, rest) = split_once_colon(rest);
+        let (line, _) = split_once_newline(rest);
+        if line.is_empty() || line == "EOF" {
+            if line == "EOF" {
+                let (_, after_eof) = split_once_newline(rest);
+                rest = after_eof;
+            }
+            break;
+        }
+
+        let (keyword, _) = split_once_colon(line);
+        if matches!(
+            keyword,
+            "NAME"
+                | "TYPE"
+                | "COMMENT"
+                | "DIMENSION"
+                | "CAPACITY"
+                | "EDGE_WEIGHT_TYPE"
+                | "EDGE_WEIGHT_FORMAT"
+                | "EDGE_DATA_FORMAT"
+                | "NODE_COORD_TYPE"
+                | "DISPLAY_DATA_TYPE"
+        ) {
+            let (_, after_colon) = split_once_colon(rest);
+            rest = after_colon;
+        }
 
         match keyword {
             "NAME" => (name, rest) = parse_name(rest).map(|(v, r)| (Some(v), r))?,
@@ -209,7 +247,16 @@ mod tests {
     #[test]
     fn test_parse_dimension() {
         assert_eq!(parse_dimension("100").unwrap(), (100, ""));
+        assert!(parse_dimension("0").is_err());
+        assert!(parse_dimension("-5").is_err());
         assert!(parse_dimension("abc").is_err());
+    }
+
+    #[test]
+    fn test_parse_capacity() {
+        assert_eq!(parse_capacity("100").unwrap(), (100, ""));
+        assert_eq!(parse_capacity("0").unwrap(), (0, ""));
+        assert!(parse_capacity("-1").is_err());
     }
 
     #[test]

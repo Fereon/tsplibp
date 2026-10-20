@@ -19,7 +19,7 @@ pub enum TSPLibError {
     MissingDimension,
     MissingEdgeDataFormat,
     MissingEdgeWeightFormat,
-    UnkownNodeCoordType,
+    UnknownNodeCoordType,
     UnexpectedNodeCoordSection,
     UnexpectedKeyword(String),
     ParsingIncomplete(String),
@@ -48,7 +48,7 @@ impl Display for TSPLibError {
             TSPLibError::MissingDimension => write!(f, "DIMENSION missing"),
             TSPLibError::MissingEdgeDataFormat => write!(f, "EDGE_DATA_FORMAT missing"),
             TSPLibError::MissingEdgeWeightFormat => write!(f, "EDGE_WEIGHT_FORMAT missing"),
-            TSPLibError::UnkownNodeCoordType => {
+            TSPLibError::UnknownNodeCoordType => {
                 write!(f, "NODE_COORD_TYPE could not be determined")
             }
             TSPLibError::UnexpectedNodeCoordSection => {

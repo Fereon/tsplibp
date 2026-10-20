@@ -9,7 +9,7 @@
 //! ```
 
 use std::{collections::HashSet, env, path::Path};
-use tsplibp::{Instance, NodeIdentifier};
+use tsplibp::{EdgeWeight, Instance, NodeIdentifier};
 
 fn nearest_neighbor_tour(
     instance: &Instance,
@@ -20,6 +20,7 @@ fn nearest_neighbor_tour(
         return Ok(nodes);
     }
 
+    let calculator = instance.weight_calculator()?;
     let mut unvisited: HashSet<NodeIdentifier> = nodes.iter().copied().collect();
     let mut tour = Vec::with_capacity(dim);
 
@@ -30,10 +31,10 @@ fn nearest_neighbor_tour(
 
     while !unvisited.is_empty() {
         let mut best_next = None;
-        let mut best_dist = i32::MAX;
+        let mut best_dist = EdgeWeight::MAX;
 
         for &candidate in &unvisited {
-            let dist = instance.weight(current, candidate)?;
+            let dist = calculator.weight(current, candidate)?;
             if dist < best_dist {
                 best_dist = dist;
                 best_next = Some(candidate);
