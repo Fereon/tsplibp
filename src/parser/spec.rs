@@ -4,9 +4,7 @@ use crate::{
         Specification, Type,
     },
     error::TSPLibError,
-    parser::{
-        parse_integer, parse_string, split_once_colon, split_once_newline, split_once_whitespace,
-    },
+    parser::{parse_integer, parse_string, split_once_colon, split_once_newline},
 };
 
 fn parse_name(input: &str) -> Result<(String, &str), TSPLibError> {
@@ -14,16 +12,10 @@ fn parse_name(input: &str) -> Result<(String, &str), TSPLibError> {
 }
 
 fn parse_dtype(input: &str) -> Result<(Type, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
-        "TSP" => {
-            // Edge case: Someone wrote their name at the wrong place in a tsp file
-            if let ("(M.~Hofmeister)", rest) = split_once_newline(rest) {
-                return Ok((Type::TSP, rest));
-            }
-
-            Type::TSP
-        }
+        "TSP" => Type::TSP,
         "ATSP" => Type::ATSP,
         "SOP" => Type::SOP,
         "HCP" => Type::HCP,
@@ -40,8 +32,9 @@ fn parse_comment(input: &str) -> Result<(String, &str), TSPLibError> {
 }
 
 fn parse_dimension(input: &str) -> Result<(Integer, &str), TSPLibError> {
-    let (dim, rest) =
-        parse_integer(input).map_err(|err| TSPLibError::InvalidDimension(err.into()))?;
+    let (line, rest) = split_once_newline(input);
+    let token = line.split_whitespace().next().unwrap_or("");
+    let (dim, _) = parse_integer(token).map_err(|err| TSPLibError::InvalidDimension(err.into()))?;
     if dim <= 0 {
         return Err(TSPLibError::InvalidDimension(Box::new(
             TSPLibError::InvalidIntegerFormat(dim.to_string()),
@@ -51,8 +44,9 @@ fn parse_dimension(input: &str) -> Result<(Integer, &str), TSPLibError> {
 }
 
 fn parse_capacity(input: &str) -> Result<(Integer, &str), TSPLibError> {
-    let (cap, rest) =
-        parse_integer(input).map_err(|err| TSPLibError::InvalidCapacity(err.into()))?;
+    let (line, rest) = split_once_newline(input);
+    let token = line.split_whitespace().next().unwrap_or("");
+    let (cap, _) = parse_integer(token).map_err(|err| TSPLibError::InvalidCapacity(err.into()))?;
     if cap < 0 {
         return Err(TSPLibError::InvalidCapacity(Box::new(
             TSPLibError::InvalidIntegerFormat(cap.to_string()),
@@ -62,7 +56,8 @@ fn parse_capacity(input: &str) -> Result<(Integer, &str), TSPLibError> {
 }
 
 fn parse_edge_weight_type(input: &str) -> Result<(EdgeWeightType, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
         "EXPLICIT" => EdgeWeightType::Explicit,
         "EUC_2D" => EdgeWeightType::Euc2D,
@@ -83,7 +78,8 @@ fn parse_edge_weight_type(input: &str) -> Result<(EdgeWeightType, &str), TSPLibE
 }
 
 fn parse_edge_weight_format(input: &str) -> Result<(EdgeWeightFormat, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
         "FUNCTION" => EdgeWeightFormat::Function,
         "FULL_MATRIX" => EdgeWeightFormat::FullMatrix,
@@ -101,7 +97,8 @@ fn parse_edge_weight_format(input: &str) -> Result<(EdgeWeightFormat, &str), TSP
 }
 
 fn parse_edge_data_format(input: &str) -> Result<(EdgeDataFormat, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
         "EDGE_LIST" => EdgeDataFormat::EdgeList,
         "ADJ_LIST" => EdgeDataFormat::AdjList,
@@ -111,7 +108,8 @@ fn parse_edge_data_format(input: &str) -> Result<(EdgeDataFormat, &str), TSPLibE
 }
 
 fn parse_node_coord_type(input: &str) -> Result<(NodeCoordType, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
         "TWOD_COORDS" => NodeCoordType::TwodCoords,
         "THREED_COORDS" => NodeCoordType::ThreedCoords,
@@ -122,7 +120,8 @@ fn parse_node_coord_type(input: &str) -> Result<(NodeCoordType, &str), TSPLibErr
 }
 
 fn parse_display_data_type(input: &str) -> Result<(DisplayDataType, &str), TSPLibError> {
-    let (value, rest) = split_once_whitespace(input);
+    let (line, rest) = split_once_newline(input);
+    let value = line.split_whitespace().next().unwrap_or("");
     let value = match value {
         "COORD_DISPLAY" => DisplayDataType::CoordDisplay,
         "TWOD_DISPLAY" => DisplayDataType::TwodDisplay,
@@ -157,6 +156,7 @@ pub fn parse_specification(input: &str) -> Result<(Specification, &str), TSPLibE
         }
 
         let (keyword, _) = split_once_colon(line);
+        let keyword = keyword.trim();
         if matches!(
             keyword,
             "NAME"
@@ -255,6 +255,10 @@ mod tests {
     #[test]
     fn test_parse_dimension() {
         assert_eq!(parse_dimension("100").unwrap(), (100, ""));
+        assert_eq!(
+            parse_dimension("100 (cities)\nrest").unwrap(),
+            (100, "rest")
+        );
         assert!(parse_dimension("0").is_err());
         assert!(parse_dimension("-5").is_err());
         assert!(parse_dimension("abc").is_err());

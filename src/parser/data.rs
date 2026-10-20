@@ -198,29 +198,39 @@ fn parse_display_data_section(
 fn parse_tour_section(
     input: &str,
     dimension: Option<Integer>,
-) -> Result<(Vec<NodeIdentifier>, &str), TSPLibError> {
+) -> Result<(Vec<Vec<NodeIdentifier>>, &str), TSPLibError> {
     let mut rest = input;
-
-    let mut tour = if let Ok(dimension) = parse_positive_dimension(dimension) {
-        Vec::with_capacity(dimension)
-    } else {
-        Vec::new()
-    };
+    let mut tours = Vec::new();
+    let initial_capacity = parse_positive_dimension(dimension).unwrap_or(0);
+    let mut current_tour = Vec::with_capacity(initial_capacity);
 
     loop {
         let trimmed = rest.trim_start();
         if trimmed.is_empty() || trimmed.starts_with("EOF") {
+            if !current_tour.is_empty() {
+                tours.push(current_tour);
+            }
             rest = trimmed;
             break;
         }
-        let (id, r) = parse_integer(rest)?;
+
+        let (id, r) = parse_integer(trimmed)?;
         rest = r;
+
         if id == -1 {
-            break;
+            if current_tour.is_empty() {
+                // An additional -1 terminates the entire section per TSPLIB95 Section 1.2.7
+                break;
+            } else {
+                tours.push(current_tour);
+                current_tour = Vec::new();
+            }
+        } else {
+            current_tour.push(id);
         }
-        tour.push(id);
     }
-    Ok((tour, rest))
+
+    Ok((tours, rest))
 }
 
 fn parse_edge_weight_section(
@@ -235,18 +245,19 @@ fn parse_edge_weight_section(
         None => return Err(TSPLibError::MissingEdgeWeightFormat),
     };
 
-    // Some SOP instances contain additional redundant data
+    let n = parse_positive_dimension(dimension)?;
+
+    // Some SOP instances contain additional redundant dimension header on the line following EDGE_WEIGHT_SECTION
     let input = if edge_weight_format == EdgeWeightFormat::FullMatrix {
         let (v, r) = split_once_newline(input);
         match parse_integer(v) {
-            Ok((_, "")) => r,
+            Ok((val, "")) if val == n as Integer => r,
             _ => input,
         }
     } else {
         input
     };
 
-    let n = parse_positive_dimension(dimension)?;
     let count = match edge_weight_format {
         EdgeWeightFormat::FullMatrix => n * n,
         EdgeWeightFormat::UpperRow
@@ -491,14 +502,28 @@ mod test {
 
     #[test]
     fn test_parse_tour_section() {
+        // Single tour with terminator -1
         let input = "1 2 3 4 5 -1";
         let (v, rest) = parse_tour_section(input, Some(5)).unwrap();
-        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        assert_eq!(v, vec![vec![1, 2, 3, 4, 5]]);
         assert_eq!(rest, "");
 
+        // Single tour with section terminator -1 (TSPLIB95 Section 1.2.7)
+        let input_double_term = "1 2 3 4 5 -1\n-1\nEOF";
+        let (v, rest) = parse_tour_section(input_double_term, Some(5)).unwrap();
+        assert_eq!(v, vec![vec![1, 2, 3, 4, 5]]);
+        assert_eq!(rest.trim_start(), "EOF");
+
+        // Collection of multiple tours
+        let input_multi = "1 2 -1\n3 4 5 -1\n-1\nEOF";
+        let (v, rest) = parse_tour_section(input_multi, Some(5)).unwrap();
+        assert_eq!(v, vec![vec![1, 2], vec![3, 4, 5]]);
+        assert_eq!(rest.trim_start(), "EOF");
+
+        // Tour terminated by EOF
         let input_eof = "1 2 3\nEOF";
         let (v, rest) = parse_tour_section(input_eof, None).unwrap();
-        assert_eq!(v, vec![1, 2, 3]);
+        assert_eq!(v, vec![vec![1, 2, 3]]);
         assert_eq!(rest, "EOF");
     }
 
@@ -671,7 +696,7 @@ EOF";
         assert!(data.edge_data_section.is_some());
         assert!(data.fixed_edges_section.is_some());
         assert_eq!(data.edge_weight_section, Some(vec![0, 7, 7, 0]));
-        assert_eq!(data.tour_section, Some(vec![1, 2]));
+        assert_eq!(data.tour_section, Some(vec![vec![1, 2]]));
         assert_eq!(rest, "");
 
         // Test erroneous notation for FIXED_EDGES_SECTION

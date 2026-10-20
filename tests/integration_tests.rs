@@ -127,6 +127,26 @@ fn test_optimal_tour_ulysses22() {
 }
 
 #[test]
+fn test_canonical_tours_tsplib95_section_2_7() {
+    // Official TSPLIB95 canonical tour length verifications:
+    // Tour: 1, 2, ..., n, 1
+    // 1. pcb442 (EUC_2D) canonical length: 221 440
+    let pcb = Instance::from_file("instances/tsp/pcb442.tsp").unwrap();
+    let pcb_canonical: Vec<_> = (1..=442).collect();
+    assert_eq!(pcb.tour_length(&pcb_canonical).unwrap(), 221_440);
+
+    // 2. gr666 (GEO) canonical length: 423 710
+    let gr = Instance::from_file("instances/tsp/gr666.tsp").unwrap();
+    let gr_canonical: Vec<_> = (1..=666).collect();
+    assert_eq!(gr.tour_length(&gr_canonical).unwrap(), 423_710);
+
+    // 3. att532 (ATT) canonical length: 309 636
+    let att = Instance::from_file("instances/tsp/att532.tsp").unwrap();
+    let att_canonical: Vec<_> = (1..=532).collect();
+    assert_eq!(att.tour_length(&att_canonical).unwrap(), 309_636);
+}
+
+#[test]
 fn test_distance_matrix_and_reader() {
     let file = std::fs::File::open("instances/tsp/eil51.tsp").unwrap();
     let instance = Instance::from_reader(file).unwrap();
@@ -150,8 +170,8 @@ fn test_explicit_weights_atsp_br17() {
     let instance = Instance::from_file("instances/atsp/br17.atsp").unwrap();
     assert_eq!(instance.dimension().unwrap(), 17);
 
-    // Self-distance is 0
-    assert_eq!(instance.weight(1, 1).unwrap(), 0);
+    // Diagonal elements in ATSP br17 are explicitly 9999 to forbid self-loops
+    assert_eq!(instance.weight(1, 1).unwrap(), 9999);
 
     // Explicit entries from matrix
     assert_eq!(instance.weight(1, 2).unwrap(), 3);

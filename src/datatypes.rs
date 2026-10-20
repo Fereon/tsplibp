@@ -50,9 +50,9 @@ pub enum EdgeWeightType {
     Max2D,
     /// 3D Maximum metric: `max(nint(dx), nint(dy), nint(dz))`
     Max3D,
-    /// 2D Manhattan metric: `nint(dx) + nint(dy)`
+    /// 2D Manhattan metric: `nint(dx + dy)`
     Man2D,
-    /// 3D Manhattan metric: `nint(dx) + nint(dy) + nint(dz)`
+    /// 3D Manhattan metric: `nint(dx + dy + dz)`
     Man3D,
     /// 2D Ceiling Euclidean metric: `ceil(sqrt(dx^2 + dy^2))`
     Ceil2D,
@@ -218,8 +218,8 @@ pub struct Data {
     pub fixed_edges_section: Option<Vec<Edge>>,
     /// 2D display coordinates for visualization
     pub display_data_section: Option<Vec<TwoDimensionalNode>>,
-    /// Node sequence of a tour
-    pub tour_section: Option<Vec<NodeIdentifier>>,
+    /// Collection of tours specified in `TOUR_SECTION` per TSPLIB95 specification
+    pub tour_section: Option<Vec<Vec<NodeIdentifier>>>,
     /// Raw explicit edge weights stored flat
     pub edge_weight_section: Option<Vec<EdgeWeight>>,
 }
@@ -369,6 +369,34 @@ impl Instance {
             return Ok(false);
         }
 
+        // Fast path for standard 1-based contiguous node IDs: 1..=dim
+        let is_contiguous_one_based = match self.data.node_coord_section {
+            Some(NodeCoordSection::TwodCoords(ref nodes)) => nodes
+                .iter()
+                .enumerate()
+                .all(|(idx, n)| n.identifier == (idx + 1) as NodeIdentifier),
+            Some(NodeCoordSection::ThreedCoords(ref nodes)) => nodes
+                .iter()
+                .enumerate()
+                .all(|(idx, n)| n.identifier == (idx + 1) as NodeIdentifier),
+            None => true,
+        };
+
+        if is_contiguous_one_based {
+            let mut visited = vec![false; dim + 1];
+            for &node in tour {
+                if node < 1 || (node as usize) > dim {
+                    return Ok(false);
+                }
+                let idx = node as usize;
+                if visited[idx] {
+                    return Ok(false);
+                }
+                visited[idx] = true;
+            }
+            return Ok(true);
+        }
+
         let mut seen = std::collections::HashSet::with_capacity(dim);
         let valid_nodes: std::collections::HashSet<_> =
             self.node_identifiers()?.into_iter().collect();
@@ -382,8 +410,16 @@ impl Instance {
         Ok(true)
     }
 
-    /// If this instance represents a tour file (`TYPE: TOUR`), returns the tour section slice.
+    /// If this instance represents a tour file (`TYPE: TOUR`), returns the first tour slice.
     pub fn tour(&self) -> Option<&[NodeIdentifier]> {
+        self.data
+            .tour_section
+            .as_ref()
+            .and_then(|tours| tours.first().map(|t| t.as_slice()))
+    }
+
+    /// If this instance represents a tour file (`TYPE: TOUR`), returns all tours in the tour section.
+    pub fn tours(&self) -> Option<&[Vec<NodeIdentifier>]> {
         self.data.tour_section.as_deref()
     }
 }
@@ -516,13 +552,14 @@ mod tests {
                 y_coordinate: 4.0,
             },
         ]));
-        data.tour_section = Some(vec![10, 20, 30]);
+        data.tour_section = Some(vec![vec![10, 20, 30]]);
         let inst = Instance {
             specification: base_spec(Some(3)),
             data,
         };
 
         assert_eq!(inst.tour(), Some(&[10, 20, 30][..]));
+        assert_eq!(inst.tours(), Some(&[vec![10, 20, 30]][..]));
         assert_eq!(inst.is_valid_tour(&[10, 20, 30]), Ok(true));
         assert_eq!(inst.is_valid_tour(&[1, 2, 3]), Ok(false));
         assert_eq!(inst.is_valid_tour(&[10, 20, 20]), Ok(false));
@@ -547,5 +584,6 @@ mod tests {
         let inst = Instance::from_reader(&content[..]).unwrap();
         assert_eq!(inst.specification.name, "mem");
         assert_eq!(inst.tour(), Some(&[1, 2][..]));
+        assert_eq!(inst.tours(), Some(&[vec![1, 2]][..]));
     }
 }

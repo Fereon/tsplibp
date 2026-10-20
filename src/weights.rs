@@ -35,20 +35,20 @@ pub fn distance_euc_3d(n1: &ThreeDimensionalNode, n2: &ThreeDimensionalNode) -> 
 }
 
 /// Calculate 2D Manhattan distance according to TSPLIB95 MAN_2D:
-/// `xd = |x_i - x_j|; yd = |y_i - y_j|; dij = nint(xd) + nint(yd)`
+/// `xd = |x_i - x_j|; yd = |y_i - y_j|; dij = nint(xd + yd)`
 pub fn distance_man_2d(n1: &TwoDimensionalNode, n2: &TwoDimensionalNode) -> EdgeWeight {
     let xd = (n1.x_coordinate - n2.x_coordinate).abs();
     let yd = (n1.y_coordinate - n2.y_coordinate).abs();
-    nint(xd) + nint(yd)
+    nint(xd + yd)
 }
 
 /// Calculate 3D Manhattan distance according to TSPLIB95 MAN_3D:
-/// `xd = |x_i - x_j|; yd = |y_i - y_j|; zd = |z_i - z_j|; dij = nint(xd) + nint(yd) + nint(zd)`
+/// `xd = |x_i - x_j|; yd = |y_i - y_j|; zd = |z_i - z_j|; dij = nint(xd + yd + zd)`
 pub fn distance_man_3d(n1: &ThreeDimensionalNode, n2: &ThreeDimensionalNode) -> EdgeWeight {
     let xd = (n1.x_coordinate - n2.x_coordinate).abs();
     let yd = (n1.y_coordinate - n2.y_coordinate).abs();
     let zd = (n1.z_coordinate - n2.z_coordinate).abs();
-    nint(xd) + nint(yd) + nint(zd)
+    nint(xd + yd + zd)
 }
 
 /// Calculate 2D Maximum distance according to TSPLIB95 MAX_2D:
@@ -79,6 +79,10 @@ pub fn distance_ceil_2d(n1: &TwoDimensionalNode, n2: &TwoDimensionalNode) -> Edg
 /// Convert coordinate in degrees.minutes format to radians for TSPLIB95 GEO distance.
 ///
 /// Note: TSPLIB95 explicitly specifies `PI = 3.141592`.
+/// Note: The original TSPLIB95 technical report contained a typo (`deg = nint(x[i])`).
+/// As clarified in the official TSPLIB FAQ, whole degrees are extracted via truncation
+/// (`deg = (int) x[i]`), here implemented with `coord.trunc()`, so that coordinates with
+/// minutes >= 30 are not incorrectly rounded up to the next degree.
 #[allow(clippy::approx_constant)]
 fn geo_to_rad(coord: f64) -> f64 {
     let pi = 3.141592;
@@ -118,14 +122,17 @@ pub(crate) fn weight_direct(
     u: NodeIdentifier,
     v: NodeIdentifier,
 ) -> Result<EdgeWeight, TSPLibError> {
-    if u == v {
-        return Ok(0);
-    }
-
     let edge_weight_type = instance
         .specification
         .edge_weight_type
         .unwrap_or(EdgeWeightType::Explicit);
+
+    // For analytical distance metrics and HCP, self-distance is always 0.
+    // For EXPLICIT matrices, we query the matrix directly so explicit diagonal
+    // entries (e.g. 9999 penalty values in ATSP br17) are preserved.
+    if u == v && edge_weight_type != EdgeWeightType::Explicit {
+        return Ok(0);
+    }
 
     match edge_weight_type {
         EdgeWeightType::Euc2D
@@ -444,15 +451,15 @@ impl<'a> WeightCalculator<'a> {
 
     /// Calculate the weight between nodes `u` and `v`.
     pub fn weight(&self, u: NodeIdentifier, v: NodeIdentifier) -> Result<EdgeWeight, TSPLibError> {
-        if u == v {
-            return Ok(0);
-        }
-
         let edge_weight_type = self
             .instance
             .specification
             .edge_weight_type
             .unwrap_or(EdgeWeightType::Explicit);
+
+        if u == v && edge_weight_type != EdgeWeightType::Explicit {
+            return Ok(0);
+        }
 
         match edge_weight_type {
             EdgeWeightType::Euc2D
@@ -522,10 +529,16 @@ fn explicit_weight_by_index(
     let index = match format {
         EdgeWeightFormat::FullMatrix => i * dim + j,
         EdgeWeightFormat::UpperRow => {
+            if i == j {
+                return Ok(0);
+            }
             let (r, c) = if i < j { (i, j) } else { (j, i) };
             r * dim - r * (r + 1) / 2 + (c - r - 1)
         }
         EdgeWeightFormat::LowerRow => {
+            if i == j {
+                return Ok(0);
+            }
             let (r, c) = if i > j { (i, j) } else { (j, i) };
             r * (r - 1) / 2 + c
         }
@@ -538,10 +551,16 @@ fn explicit_weight_by_index(
             r * (r + 1) / 2 + c
         }
         EdgeWeightFormat::UpperCol => {
+            if i == j {
+                return Ok(0);
+            }
             let (r, c) = if i < j { (i, j) } else { (j, i) };
             c * (c - 1) / 2 + r
         }
         EdgeWeightFormat::LowerCol => {
+            if i == j {
+                return Ok(0);
+            }
             let (r, c) = if i > j { (i, j) } else { (j, i) };
             c * dim - c * (c + 1) / 2 + (r - c - 1)
         }
@@ -571,6 +590,10 @@ fn hcp_weight(
     v: NodeIdentifier,
     hcp_edges: Option<&HashSet<(NodeIdentifier, NodeIdentifier)>>,
 ) -> Result<EdgeWeight, TSPLibError> {
+    if u == v {
+        return Ok(0);
+    }
+
     if let Some(set) = hcp_edges {
         let pair = if u <= v { (u, v) } else { (v, u) };
         return if set.contains(&pair) {
@@ -660,6 +683,18 @@ mod tests {
         assert_eq!(distance_euc_2d(&a2, &c2), 1);
         assert_eq!(distance_ceil_2d(&a2, &c2), 2);
 
+        // Manhattan distance tests with fractional coordinates:
+        // Case 1: xd = 0.4, yd = 0.4 -> xd + yd = 0.8 -> nint(0.8) = 1
+        // (If rounded individually: nint(0.4) + nint(0.4) = 0 + 0 = 0, which was the old bug)
+        let m1 = n2d(10, 0.0, 0.0);
+        let m2 = n2d(11, 0.4, 0.4);
+        assert_eq!(distance_man_2d(&m1, &m2), 1);
+
+        // Case 2: xd = 0.5, yd = 0.5 -> xd + yd = 1.0 -> nint(1.0) = 1
+        // (If rounded individually: nint(0.5) + nint(0.5) = 1 + 1 = 2)
+        let m3 = n2d(12, 0.5, 0.5);
+        assert_eq!(distance_man_2d(&m1, &m3), 1);
+
         // ATT metric:
         // Case 1: rij = sqrt((10 + 0)/10) = 1.0 -> tij = 1, tij == rij -> 1
         let att_exact = n2d(2, 3.0, 1.0);
@@ -680,6 +715,11 @@ mod tests {
         assert_eq!(distance_euc_3d(&a3, &b3), 7);
         assert_eq!(distance_man_3d(&a3, &b3), 11);
         assert_eq!(distance_max_3d(&a3, &b3), 6);
+
+        // 3D Manhattan fractional test: xd = 0.3, yd = 0.3, zd = 0.3 -> sum = 0.9 -> nint = 1
+        let m3d1 = n3d(10, 0.0, 0.0, 0.0);
+        let m3d2 = n3d(11, 0.3, 0.3, 0.3);
+        assert_eq!(distance_man_3d(&m3d1, &m3d2), 1);
     }
 
     #[test]
@@ -782,7 +822,46 @@ mod tests {
             assert_eq!(inst.weight(3, 1), Ok(20));
             assert_eq!(inst.weight(2, 3), Ok(30));
             assert_eq!(inst.weight(3, 2), Ok(30));
+            assert_eq!(inst.weight(1, 1), Ok(0));
         }
+    }
+
+    #[test]
+    fn test_explicit_matrix_non_zero_diagonal() {
+        // 2x2 matrix with 9999 on diagonal (like ATSP br17)
+        let inst = Instance {
+            specification: Specification {
+                name: "diag".into(),
+                dtype: Type::ATSP,
+                comment: vec![],
+                dimension: Some(2),
+                capacity: None,
+                edge_weight_type: Some(EdgeWeightType::Explicit),
+                edge_weight_format: Some(EdgeWeightFormat::FullMatrix),
+                edge_data_format: None,
+                node_coord_type: None,
+                display_data_type: None,
+            },
+            data: Data {
+                node_coord_section: None,
+                depot_section: None,
+                demand_section: None,
+                edge_data_section: None,
+                fixed_edges_section: None,
+                display_data_section: None,
+                tour_section: None,
+                edge_weight_section: Some(vec![9999, 5, 3, 9999]),
+            },
+        };
+
+        assert_eq!(inst.weight(1, 1), Ok(9999));
+        assert_eq!(inst.weight(2, 2), Ok(9999));
+        assert_eq!(inst.weight(1, 2), Ok(5));
+        assert_eq!(inst.weight(2, 1), Ok(3));
+
+        let calc = inst.weight_calculator().unwrap();
+        assert_eq!(calc.weight(1, 1), Ok(9999));
+        assert_eq!(calc.weight(2, 2), Ok(9999));
     }
 
     #[test]
