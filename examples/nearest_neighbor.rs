@@ -9,7 +9,7 @@
 //! ```
 
 use std::{collections::HashSet, env, path::Path};
-use tsplibp::{EdgeWeight, Instance, NodeIdentifier};
+use tsplibp::{EdgeWeight, Instance, NodeIdentifier, Type};
 
 fn nearest_neighbor_tour(
     instance: &Instance,
@@ -23,6 +23,7 @@ fn nearest_neighbor_tour(
     let calculator = instance.weight_calculator()?;
     let mut unvisited: HashSet<NodeIdentifier> = nodes.iter().copied().collect();
     let mut tour = Vec::with_capacity(dim);
+    let is_sop = instance.specification.dtype == Type::SOP;
 
     // Start at the first node
     let mut current = nodes[0];
@@ -35,13 +36,19 @@ fn nearest_neighbor_tour(
 
         for &candidate in &unvisited {
             let dist = calculator.weight(current, candidate)?;
+            // In SOP instances, -1 encodes a precedence constraint (forbidden transition)
+            if is_sop && dist < 0 {
+                continue;
+            }
             if dist < best_dist {
                 best_dist = dist;
                 best_next = Some(candidate);
             }
         }
 
-        let next = best_next.expect("unvisited set is non-empty");
+        let next = best_next
+            .or_else(|| unvisited.iter().copied().next())
+            .expect("unvisited set is non-empty");
         tour.push(next);
         unvisited.remove(&next);
         current = next;
@@ -68,10 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Nearest Neighbor Tour Length: {}", heuristic_length);
 
     // Check if an optimal tour file exists alongside the instance
-    let opt_path_str = file_path.replace(".tsp", ".opt.tour");
-    let opt_path = Path::new(&opt_path_str);
+    let opt_path = Path::new(file_path).with_extension("opt.tour");
     if opt_path.exists() {
-        let opt_instance = Instance::from_file(opt_path)?;
+        let opt_instance = Instance::from_file(&opt_path)?;
         if let Some(opt_tour) = opt_instance.tour() {
             let opt_length = instance.tour_length(opt_tour)?;
             println!("Official Optimal Tour Length: {}", opt_length);

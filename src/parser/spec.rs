@@ -8,7 +8,11 @@ use crate::{
 };
 
 fn parse_name(input: &str) -> Result<(String, &str), TSPLibError> {
-    Ok(parse_string(input))
+    let (name, rest) = parse_string(input);
+    if name.is_empty() {
+        return Err(TSPLibError::MissingName);
+    }
+    Ok((name, rest))
 }
 
 fn parse_dtype(input: &str) -> Result<(Type, &str), TSPLibError> {
@@ -147,16 +151,17 @@ pub fn parse_specification(input: &str) -> Result<(Specification, &str), TSPLibE
     loop {
         let old_rest = rest;
         let (line, _) = split_once_newline(rest);
-        if line.is_empty() || line == "EOF" {
-            if line == "EOF" {
+        let (keyword, _) = split_once_colon(line);
+        let keyword = keyword.trim();
+
+        if line.is_empty() || keyword == "EOF" {
+            if keyword == "EOF" {
                 let (_, after_eof) = split_once_newline(rest);
                 rest = after_eof;
             }
             break;
         }
 
-        let (keyword, _) = split_once_colon(line);
-        let keyword = keyword.trim();
         if matches!(
             keyword,
             "NAME"
@@ -204,7 +209,6 @@ pub fn parse_specification(input: &str) -> Result<(Specification, &str), TSPLibE
                 (display_data_type, rest) =
                     parse_display_data_type(rest).map(|(v, r)| (Some(v), r))?;
             }
-            "EOF" | "" => break,
             _ => {
                 rest = old_rest;
                 break;
@@ -235,6 +239,7 @@ mod tests {
     #[test]
     fn test_parse_name() {
         assert_eq!(parse_name("test").unwrap(), ("test".to_string(), ""));
+        assert_eq!(parse_name("\nTYPE: TSP"), Err(TSPLibError::MissingName));
     }
 
     #[test]
@@ -380,9 +385,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_specification_empty_comment_and_eof_colon() {
+        let input = "NAME: test\nCOMMENT:\nCOMMENT : \nTYPE: TSP\nDIMENSION: 5\nEOF :\n";
+        let (spec, rest) = parse_specification(input).unwrap();
+        assert_eq!(spec.name, "test");
+        assert_eq!(spec.dtype, Type::TSP);
+        assert_eq!(spec.comment, vec!["", ""]);
+        assert_eq!(spec.dimension, Some(5));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
     fn test_parse_specification_missing_required_fields() {
         assert_eq!(
             parse_specification("TYPE: TSP\nEOF"),
+            Err(TSPLibError::MissingName)
+        );
+        assert_eq!(
+            parse_specification("NAME:\nTYPE: TSP\nEOF"),
             Err(TSPLibError::MissingName)
         );
         assert_eq!(

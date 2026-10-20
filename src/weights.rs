@@ -116,6 +116,29 @@ pub fn distance_att(n1: &TwoDimensionalNode, n2: &TwoDimensionalNode) -> EdgeWei
     if (tij as f64) < rij { tij + 1 } else { tij }
 }
 
+/// Calculate Crystallography XRAY1 distance (equal motor speeds) according to TSPLIB95 Section 2.7:
+/// `distp = min(|phi_i - phi_j|, ||phi_i - phi_j| - 360.0|)`
+/// `distc = |chi_i - chi_j|; distt = |twoth_i - twoth_j|`
+/// `cost = max(distp, distc, distt); icost = (int)(100.0 * cost + 0.5)`
+pub fn distance_xray1(n1: &ThreeDimensionalNode, n2: &ThreeDimensionalNode) -> EdgeWeight {
+    let d_phi = (n1.x_coordinate - n2.x_coordinate).abs();
+    let distp = d_phi.min((d_phi - 360.0).abs());
+    let distc = (n1.y_coordinate - n2.y_coordinate).abs();
+    let distt = (n1.z_coordinate - n2.z_coordinate).abs();
+    let cost = distp.max(distc).max(distt);
+    nint(100.0 * cost)
+}
+
+/// Calculate Crystallography XRAY2 distance (unequal motor speeds: 1.25, 1.50, 1.15) according to TSPLIB95 Section 2.7 (`duneq.f`):
+pub fn distance_xray2(n1: &ThreeDimensionalNode, n2: &ThreeDimensionalNode) -> EdgeWeight {
+    let d_phi = (n1.x_coordinate - n2.x_coordinate).abs();
+    let distp = d_phi.min((d_phi - 360.0).abs()) / 1.25;
+    let distc = (n1.y_coordinate - n2.y_coordinate).abs() / 1.50;
+    let distt = (n1.z_coordinate - n2.z_coordinate).abs() / 1.15;
+    let cost = distp.max(distc).max(distt);
+    nint(100.0 * cost)
+}
+
 /// Fast single-pair weight calculation without allocating lookup maps when node IDs are standard 1-indexed.
 pub(crate) fn weight_direct(
     instance: &Instance,
@@ -152,24 +175,37 @@ pub(crate) fn weight_direct(
             let n2 = find_2d_node(nodes, v)?;
             Ok(compute_2d_distance(edge_weight_type, n1, n2))
         }
-        EdgeWeightType::Euc3D | EdgeWeightType::Man3D | EdgeWeightType::Max3D => {
-            let Some(NodeCoordSection::ThreedCoords(nodes)) =
+        EdgeWeightType::Euc3D
+        | EdgeWeightType::Man3D
+        | EdgeWeightType::Max3D
+        | EdgeWeightType::XRay1
+        | EdgeWeightType::XRay2 => {
+            if let Some(NodeCoordSection::ThreedCoords(nodes)) =
                 instance.data.node_coord_section.as_ref()
-            else {
-                return Err(TSPLibError::WeightsNotAvailable(
-                    "missing 3D coordinates".into(),
-                ));
-            };
-            let n1 = find_3d_node(nodes, u)?;
-            let n2 = find_3d_node(nodes, v)?;
-            Ok(compute_3d_distance(edge_weight_type, n1, n2))
+            {
+                let n1 = find_3d_node(nodes, u)?;
+                let n2 = find_3d_node(nodes, v)?;
+                return Ok(compute_3d_distance(edge_weight_type, n1, n2));
+            }
+            if matches!(
+                edge_weight_type,
+                EdgeWeightType::XRay1 | EdgeWeightType::XRay2
+            ) && instance.data.edge_weight_section.is_some()
+            {
+                let i = find_node_index(instance, u)?;
+                let j = find_node_index(instance, v)?;
+                return explicit_weight_by_index(instance, u, v, i, j, None);
+            }
+            Err(TSPLibError::WeightsNotAvailable(
+                "missing 3D coordinates".into(),
+            ))
         }
         EdgeWeightType::Explicit => {
             let i = find_node_index(instance, u)?;
             let j = find_node_index(instance, v)?;
             explicit_weight_by_index(instance, u, v, i, j, None)
         }
-        EdgeWeightType::Special | EdgeWeightType::XRay1 | EdgeWeightType::XRay2 => {
+        EdgeWeightType::Special => {
             if instance.data.edge_weight_section.is_some() {
                 let i = find_node_index(instance, u)?;
                 let j = find_node_index(instance, v)?;
@@ -283,6 +319,8 @@ fn compute_3d_distance(
         EdgeWeightType::Euc3D => distance_euc_3d(n1, n2),
         EdgeWeightType::Man3D => distance_man_3d(n1, n2),
         EdgeWeightType::Max3D => distance_max_3d(n1, n2),
+        EdgeWeightType::XRay1 => distance_xray1(n1, n2),
+        EdgeWeightType::XRay2 => distance_xray2(n1, n2),
         _ => unreachable!(),
     }
 }
@@ -391,7 +429,12 @@ impl<'a> WeightCalculator<'a> {
     #[inline]
     pub fn node_index(&self, id: NodeIdentifier) -> Result<usize, TSPLibError> {
         if self.is_contiguous_one_based {
-            if id >= 1 && (id as usize) <= self.dimension {
+            let dim = if self.dimension > 0 {
+                self.dimension
+            } else {
+                self.instance.dimension()?
+            };
+            if id >= 1 && (id as usize) <= dim {
                 return Ok((id - 1) as usize);
             } else {
                 return Err(TSPLibError::NodeNotFound(id));
@@ -472,17 +515,42 @@ impl<'a> WeightCalculator<'a> {
                 let n2 = self.get_2d_node(v)?;
                 Ok(compute_2d_distance(edge_weight_type, n1, n2))
             }
-            EdgeWeightType::Euc3D | EdgeWeightType::Man3D | EdgeWeightType::Max3D => {
-                let n1 = self.get_3d_node(u)?;
-                let n2 = self.get_3d_node(v)?;
-                Ok(compute_3d_distance(edge_weight_type, n1, n2))
+            EdgeWeightType::Euc3D
+            | EdgeWeightType::Man3D
+            | EdgeWeightType::Max3D
+            | EdgeWeightType::XRay1
+            | EdgeWeightType::XRay2 => {
+                if self.instance.data.node_coord_section.is_some() {
+                    let n1 = self.get_3d_node(u)?;
+                    let n2 = self.get_3d_node(v)?;
+                    return Ok(compute_3d_distance(edge_weight_type, n1, n2));
+                }
+                if matches!(
+                    edge_weight_type,
+                    EdgeWeightType::XRay1 | EdgeWeightType::XRay2
+                ) && self.instance.data.edge_weight_section.is_some()
+                {
+                    let i = self.node_index(u)?;
+                    let j = self.node_index(v)?;
+                    return explicit_weight_by_index(
+                        self.instance,
+                        u,
+                        v,
+                        i,
+                        j,
+                        self.hcp_edges.as_ref(),
+                    );
+                }
+                Err(TSPLibError::WeightsNotAvailable(
+                    "missing 3D coordinates".into(),
+                ))
             }
             EdgeWeightType::Explicit => {
                 let i = self.node_index(u)?;
                 let j = self.node_index(v)?;
                 explicit_weight_by_index(self.instance, u, v, i, j, self.hcp_edges.as_ref())
             }
-            EdgeWeightType::Special | EdgeWeightType::XRay1 | EdgeWeightType::XRay2 => {
+            EdgeWeightType::Special => {
                 // If explicit weights exist, fall back to them
                 if self.instance.data.edge_weight_section.is_some() {
                     let i = self.node_index(u)?;
@@ -716,6 +784,14 @@ mod tests {
         assert_eq!(distance_man_3d(&a3, &b3), 11);
         assert_eq!(distance_max_3d(&a3, &b3), 6);
 
+        // XRAY1 & XRAY2 metrics (including 360-degree wrap-around on PHI)
+        let x1 = n3d(1, 350.0, 10.0, 20.0);
+        let x2 = n3d(2, 5.0, 12.0, 25.0);
+        // d_phi = 345 -> min(345, 15) = 15; distc = 2; distt = 5 -> max = 15 -> 1500
+        assert_eq!(distance_xray1(&x1, &x2), 1500);
+        // XRAY2: 15 / 1.25 = 12.0 -> 1200
+        assert_eq!(distance_xray2(&x1, &x2), 1200);
+
         // 3D Manhattan fractional test: xd = 0.3, yd = 0.3, zd = 0.3 -> sum = 0.9 -> nint = 1
         let m3d1 = n3d(10, 0.0, 0.0, 0.0);
         let m3d2 = n3d(11, 0.3, 0.3, 0.3);
@@ -728,6 +804,8 @@ mod tests {
             (EdgeWeightType::Euc3D, 7),
             (EdgeWeightType::Man3D, 11),
             (EdgeWeightType::Max3D, 6),
+            (EdgeWeightType::XRay1, 600),
+            (EdgeWeightType::XRay2, 522),
         ] {
             let inst = Instance {
                 specification: Specification {
@@ -939,20 +1017,20 @@ mod tests {
             Err(TSPLibError::WeightsNotAvailable(_))
         ));
 
-        // Unsupported XRay1 without explicit section, and fallback when explicit section exists
-        let inst_xray = Instance {
+        // Unsupported Special without explicit section, and fallback when explicit section exists
+        let inst_special = Instance {
             specification: Specification {
-                edge_weight_type: Some(EdgeWeightType::XRay1),
+                edge_weight_type: Some(EdgeWeightType::Special),
                 ..inst_no_2d.specification.clone()
             },
             data: base_data.clone(),
         };
         assert!(matches!(
-            inst_xray.weight(1, 2),
+            inst_special.weight(1, 2),
             Err(TSPLibError::UnsupportedWeightCalculation(_))
         ));
         assert!(matches!(
-            inst_xray.weight_calculator().unwrap().weight(1, 2),
+            inst_special.weight_calculator().unwrap().weight(1, 2),
             Err(TSPLibError::UnsupportedWeightCalculation(_))
         ));
 

@@ -29,7 +29,7 @@ fn split_once_colon(input: &str) -> (&str, &str) {
     let Some((s1, s2)) = input.split_once(':') else {
         return (input.trim_end(), "");
     };
-    let (s1, s2) = (s1.trim_end(), s2.trim_start());
+    let (s1, s2) = (s1.trim_end(), s2.trim_start_matches([' ', '\t']));
     (s1, s2)
 }
 
@@ -131,6 +131,10 @@ mod test {
         assert_eq!(split_once_colon("NAME : eil51"), ("NAME", "eil51"));
         assert_eq!(split_once_colon("NAME:  eil51"), ("NAME", "eil51"));
         assert_eq!(split_once_colon("NAME:"), ("NAME", ""));
+        assert_eq!(
+            split_once_colon("COMMENT:\nTYPE: TSP"),
+            ("COMMENT", "\nTYPE: TSP")
+        );
         assert_eq!(split_once_colon(":eil51"), ("", "eil51"));
         assert_eq!(split_once_colon("NAME eil51"), ("NAME eil51", ""));
         assert_eq!(split_once_colon(""), ("", ""));

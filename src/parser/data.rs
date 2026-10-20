@@ -2,7 +2,7 @@ use crate::{
     datatypes::{
         Data, Demand, Edge, EdgeDataFormat, EdgeDataSection, EdgeWeight, EdgeWeightFormat,
         EdgeWeightType, Integer, NodeCoordSection, NodeCoordType, NodeIdentifier, Specification,
-        ThreeDimensionalNode, TwoDimensionalNode,
+        ThreeDimensionalNode, TwoDimensionalNode, Type,
     },
     error::TSPLibError,
     parser::{parse_integer, parse_real, split_once_newline, split_once_whitespace},
@@ -20,23 +20,50 @@ fn parse_positive_dimension(dimension: Option<Integer>) -> Result<usize, TSPLibE
     })
 }
 
+fn infer_node_coord_type(
+    input: &str,
+    node_coord_type: Option<NodeCoordType>,
+    edge_weight_type: Option<EdgeWeightType>,
+) -> Result<NodeCoordType, TSPLibError> {
+    if let Some(node_coord_type) = node_coord_type {
+        return Ok(node_coord_type);
+    }
+
+    match edge_weight_type {
+        Some(
+            EdgeWeightType::Euc2D
+            | EdgeWeightType::Max2D
+            | EdgeWeightType::Man2D
+            | EdgeWeightType::Ceil2D
+            | EdgeWeightType::Geo
+            | EdgeWeightType::Att,
+        ) => return Ok(NodeCoordType::TwodCoords),
+        Some(
+            EdgeWeightType::Euc3D
+            | EdgeWeightType::Max3D
+            | EdgeWeightType::Man3D
+            | EdgeWeightType::XRay1
+            | EdgeWeightType::XRay2,
+        ) => return Ok(NodeCoordType::ThreedCoords),
+        _ => {}
+    }
+
+    let (line, _) = split_once_newline(input);
+    let count = line.split_whitespace().count();
+    match count {
+        3 => Ok(NodeCoordType::TwodCoords),
+        4 => Ok(NodeCoordType::ThreedCoords),
+        _ => Err(TSPLibError::UnknownNodeCoordType),
+    }
+}
+
 fn parse_node_coord_section(
     input: &str,
     node_coord_type: Option<NodeCoordType>,
+    edge_weight_type: Option<EdgeWeightType>,
     dimension: Option<Integer>,
 ) -> Result<(NodeCoordSection, &str), TSPLibError> {
-    let node_coord_type = if let Some(node_coord_type) = node_coord_type {
-        node_coord_type
-    } else {
-        let (line, _) = split_once_newline(input);
-        let count = line.split_whitespace().count();
-        match count {
-            3 => NodeCoordType::TwodCoords,
-            4 => NodeCoordType::ThreedCoords,
-            _ => return Err(TSPLibError::UnknownNodeCoordType),
-        }
-    };
-
+    let node_coord_type = infer_node_coord_type(input, node_coord_type, edge_weight_type)?;
     let dimension = parse_positive_dimension(dimension)?;
 
     let mut rest = input;
@@ -195,6 +222,22 @@ fn parse_display_data_section(
     Ok((display_data, rest))
 }
 
+fn is_data_section_or_eof(token: &str) -> bool {
+    matches!(
+        token.trim_end_matches(':'),
+        "NODE_COORD_SECTION"
+            | "DEPOT_SECTION"
+            | "DEMAND_SECTION"
+            | "EDGE_DATA_SECTION"
+            | "FIXED_EDGES_SECTION"
+            | "FIXED_EDGES"
+            | "DISPLAY_DATA_SECTION"
+            | "TOUR_SECTION"
+            | "EDGE_WEIGHT_SECTION"
+            | "EOF"
+    )
+}
+
 fn parse_tour_section(
     input: &str,
     dimension: Option<Integer>,
@@ -206,7 +249,8 @@ fn parse_tour_section(
 
     loop {
         let trimmed = rest.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with("EOF") {
+        let (next_token, _) = split_once_whitespace(trimmed);
+        if trimmed.is_empty() || is_data_section_or_eof(next_token) {
             if !current_tour.is_empty() {
                 tours.push(current_tour);
             }
@@ -235,6 +279,7 @@ fn parse_tour_section(
 
 fn parse_edge_weight_section(
     input: &str,
+    dtype: Type,
     dimension: Option<Integer>,
     edge_weight_type: Option<EdgeWeightType>,
     edge_weight_format: Option<EdgeWeightFormat>,
@@ -247,16 +292,17 @@ fn parse_edge_weight_section(
 
     let n = parse_positive_dimension(dimension)?;
 
-    // Some SOP instances contain additional redundant dimension header on the line following EDGE_WEIGHT_SECTION
-    let input = if edge_weight_format == EdgeWeightFormat::FullMatrix {
-        let (v, r) = split_once_newline(input);
-        match parse_integer(v) {
-            Ok((val, "")) if val == n as Integer => r,
-            _ => input,
-        }
-    } else {
-        input
-    };
+    // SOP instances in TSPLIB95 contain an additional redundant dimension header on the line following EDGE_WEIGHT_SECTION
+    let input =
+        if edge_weight_format == EdgeWeightFormat::FullMatrix && (dtype == Type::SOP || n > 1) {
+            let (v, r) = split_once_newline(input);
+            match parse_integer(v) {
+                Ok((val, "")) if val == n as Integer => r,
+                _ => input,
+            }
+        } else {
+            input
+        };
 
     let count = match edge_weight_format {
         EdgeWeightFormat::FullMatrix => n * n,
@@ -281,6 +327,14 @@ fn parse_edge_weight_section(
     Ok((weights, rest))
 }
 
+fn strip_optional_colon(input: &str) -> &str {
+    if let (":", r) = split_once_whitespace(input) {
+        r
+    } else {
+        input
+    }
+}
+
 pub fn parse_data_section<'a>(
     input: &'a str,
     specification: &Specification,
@@ -295,14 +349,37 @@ pub fn parse_data_section<'a>(
     let mut edge_weight_section = None;
 
     let mut rest = input;
-    let mut keyword;
+    let mut raw_keyword;
     loop {
-        (keyword, rest) = split_once_whitespace(rest);
+        (raw_keyword, rest) = split_once_whitespace(rest);
+        if raw_keyword.is_empty() {
+            break;
+        }
+        let had_attached_colon = raw_keyword.ends_with(':');
+        let keyword = raw_keyword.trim_end_matches(':');
+        if matches!(
+            keyword,
+            "NODE_COORD_SECTION"
+                | "DEPOT_SECTION"
+                | "DEMAND_SECTION"
+                | "EDGE_DATA_SECTION"
+                | "FIXED_EDGES_SECTION"
+                | "FIXED_EDGES"
+                | "DISPLAY_DATA_SECTION"
+                | "TOUR_SECTION"
+                | "EDGE_WEIGHT_SECTION"
+                | "EOF"
+        ) && !had_attached_colon
+        {
+            rest = strip_optional_colon(rest);
+        }
+
         match keyword {
             "NODE_COORD_SECTION" => {
                 let (value, r) = parse_node_coord_section(
                     rest,
                     specification.node_coord_type,
+                    specification.edge_weight_type,
                     specification.dimension,
                 )?;
                 node_coord_section = Some(value);
@@ -324,13 +401,7 @@ pub fn parse_data_section<'a>(
                 rest = r;
             }
             "FIXED_EDGES_SECTION" | "FIXED_EDGES" => {
-                // Some examples contain erroneous notation
-                let (value, r) = if let (":", r) = split_once_whitespace(rest) {
-                    parse_fixed_data_section(r)?
-                } else {
-                    parse_fixed_data_section(rest)?
-                };
-
+                let (value, r) = parse_fixed_data_section(rest)?;
                 fixed_edges_section = Some(value);
                 rest = r;
             }
@@ -347,6 +418,7 @@ pub fn parse_data_section<'a>(
             "EDGE_WEIGHT_SECTION" => {
                 let (value, r) = parse_edge_weight_section(
                     rest,
+                    specification.dtype,
                     specification.dimension,
                     specification.edge_weight_type,
                     specification.edge_weight_format,
@@ -354,9 +426,9 @@ pub fn parse_data_section<'a>(
                 edge_weight_section = Some(value);
                 rest = r;
             }
-            "EOF" | "" => break,
-            s => {
-                return Err(TSPLibError::UnexpectedKeyword(s.to_string()));
+            "EOF" => break,
+            _ => {
+                return Err(TSPLibError::UnexpectedKeyword(raw_keyword.to_string()));
             }
         }
     }
@@ -384,7 +456,8 @@ mod test {
     fn test_parse_node_coord_section() {
         let input = "1 1.0 2.0\n2 3.0 4.0";
         let (v, rest) =
-            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), Some(2)).unwrap();
+            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None, Some(2))
+                .unwrap();
         if let NodeCoordSection::TwodCoords(coords) = v {
             assert_eq!(
                 coords,
@@ -408,7 +481,8 @@ mod test {
 
         let input = "1 1.0 2.0 3.0\n2 4.0 5.0 6.0";
         let (v, rest) =
-            parse_node_coord_section(input, Some(NodeCoordType::ThreedCoords), Some(2)).unwrap();
+            parse_node_coord_section(input, Some(NodeCoordType::ThreedCoords), None, Some(2))
+                .unwrap();
         if let NodeCoordSection::ThreedCoords(coords) = v {
             assert_eq!(
                 coords,
@@ -520,11 +594,17 @@ mod test {
         assert_eq!(v, vec![vec![1, 2], vec![3, 4, 5]]);
         assert_eq!(rest.trim_start(), "EOF");
 
-        // Tour terminated by EOF
+        // Tour terminated by EOF or another section without -1
         let input_eof = "1 2 3\nEOF";
         let (v, rest) = parse_tour_section(input_eof, None).unwrap();
         assert_eq!(v, vec![vec![1, 2, 3]]);
         assert_eq!(rest, "EOF");
+
+        // Single -1 tour followed by another section
+        let input_next_sec = "1 2 -1\nDISPLAY_DATA_SECTION\n1 0.0 0.0\n2 1.0 1.0";
+        let (v, rest) = parse_tour_section(input_next_sec, Some(2)).unwrap();
+        assert_eq!(v, vec![vec![1, 2]]);
+        assert!(rest.starts_with("DISPLAY_DATA_SECTION"));
     }
 
     #[test]
@@ -532,6 +612,7 @@ mod test {
         let input = "1 2 3 4";
         let (v, rest) = parse_edge_weight_section(
             input,
+            Type::TSP,
             Some(2),
             Some(EdgeWeightType::Explicit),
             Some(EdgeWeightFormat::FullMatrix),
@@ -540,22 +621,40 @@ mod test {
         assert_eq!(v, vec![1, 2, 3, 4]);
         assert_eq!(rest, "");
 
+        // 1x1 FullMatrix with value 1 on its own line must not be swallowed for non-SOP
+        let (v, rest) = parse_edge_weight_section(
+            "1\n",
+            Type::TSP,
+            Some(1),
+            Some(EdgeWeightType::Explicit),
+            Some(EdgeWeightFormat::FullMatrix),
+        )
+        .unwrap();
+        assert_eq!(v, vec![1]);
+        assert_eq!(rest, "");
+
         // Default to FullMatrix when EdgeWeightType::Explicit and format is None
-        let (v, rest) =
-            parse_edge_weight_section(input, Some(2), Some(EdgeWeightType::Explicit), None)
-                .unwrap();
+        let (v, rest) = parse_edge_weight_section(
+            input,
+            Type::TSP,
+            Some(2),
+            Some(EdgeWeightType::Explicit),
+            None,
+        )
+        .unwrap();
         assert_eq!(v, vec![1, 2, 3, 4]);
         assert_eq!(rest, "");
 
         // Missing format when not Explicit
         assert_eq!(
-            parse_edge_weight_section(input, Some(2), None, None),
+            parse_edge_weight_section(input, Type::TSP, Some(2), None, None),
             Err(TSPLibError::MissingEdgeWeightFormat)
         );
 
         let input = "1 2 3";
         let (v, rest) = parse_edge_weight_section(
             input,
+            Type::TSP,
             Some(3),
             Some(EdgeWeightType::Explicit),
             Some(EdgeWeightFormat::UpperRow),
@@ -568,6 +667,7 @@ mod test {
         let input_diag = "1 2 3 4 5 6";
         let (v, rest) = parse_edge_weight_section(
             input_diag,
+            Type::TSP,
             Some(3),
             Some(EdgeWeightType::Explicit),
             Some(EdgeWeightFormat::LowerDiagRow),
@@ -578,6 +678,7 @@ mod test {
 
         let (v, rest) = parse_edge_weight_section(
             "",
+            Type::TSP,
             Some(3),
             Some(EdgeWeightType::Euc2D),
             Some(EdgeWeightFormat::Function),
@@ -590,7 +691,7 @@ mod test {
     #[test]
     fn test_parse_node_coord_section_inference() {
         let input = "1 1.0 2.0\n2 3.0 4.0";
-        let (v, _) = parse_node_coord_section(input, None, Some(2)).unwrap();
+        let (v, _) = parse_node_coord_section(input, None, None, Some(2)).unwrap();
         if let NodeCoordSection::TwodCoords(coords) = v {
             assert_eq!(
                 coords,
@@ -612,7 +713,7 @@ mod test {
         }
 
         let input = "1 1.0 2.0 3.0\n2 4.0 5.0 6.0";
-        let (v, _) = parse_node_coord_section(input, None, Some(2)).unwrap();
+        let (v, _) = parse_node_coord_section(input, None, None, Some(2)).unwrap();
         if let NodeCoordSection::ThreedCoords(coords) = v {
             assert_eq!(
                 coords,
@@ -639,14 +740,19 @@ mod test {
     #[test]
     fn test_parse_node_coord_section_errors() {
         let input = "1 1.0 2.0";
-        assert!(parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None).is_err());
         assert!(
-            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), Some(-1)).is_err()
+            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None, None).is_err()
         );
-        assert!(parse_node_coord_section(input, Some(NodeCoordType::NoCoords), Some(1)).is_err());
+        assert!(
+            parse_node_coord_section(input, Some(NodeCoordType::TwodCoords), None, Some(-1))
+                .is_err()
+        );
+        assert!(
+            parse_node_coord_section(input, Some(NodeCoordType::NoCoords), None, Some(1)).is_err()
+        );
         let bad_input = "1 1.0";
         assert_eq!(
-            parse_node_coord_section(bad_input, None, Some(1)),
+            parse_node_coord_section(bad_input, None, None, Some(1)),
             Err(TSPLibError::UnknownNodeCoordType)
         );
     }
@@ -679,15 +785,15 @@ mod test {
             display_data_type: Some(DisplayDataType::TwodDisplay),
         };
         let input = "\
-NODE_COORD_SECTION\n1 1.0 2.0\n2 3.0 4.0\n\
-DISPLAY_DATA_SECTION\n1 10.0 20.0\n2 30.0 40.0\n\
-DEMAND_SECTION\n1 0\n2 5\n\
-DEPOT_SECTION\n1 -1\n\
+NODE_COORD_SECTION:\n1 1.0 2.0\n2 3.0 4.0\n\
+DISPLAY_DATA_SECTION :\n1 10.0 20.0\n2 30.0 40.0\n\
+DEMAND_SECTION:\n1 0\n2 5\n\
+DEPOT_SECTION :\n1 -1\n\
 EDGE_DATA_SECTION\n1 2 -1\n\
-FIXED_EDGES_SECTION\n1 2 -1\n\
-EDGE_WEIGHT_SECTION\n0 7 7 0\n\
-TOUR_SECTION\n1 2 -1\n\
-EOF";
+FIXED_EDGES_SECTION :\n1 2 -1\n\
+EDGE_WEIGHT_SECTION:\n0 7 7 0\n\
+TOUR_SECTION :\n1 2 -1\n\
+EOF :";
         let (data, rest) = parse_data_section(input, &spec).unwrap();
         assert!(data.node_coord_section.is_some());
         assert!(data.display_data_section.is_some());

@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading instance: {}", file_path);
     let instance = Instance::from_file(file_path)?;
     let dim = instance.dimension()?;
+    let nodes = instance.node_identifiers()?;
 
     println!("Computing full {}x{} distance matrix...", dim, dim);
     let matrix = instance.distance_matrix()?;
@@ -28,13 +29,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Matrix preview (first 5x5 submatrix):");
     let preview_dim = dim.min(5);
     print!("     ");
-    for j in 0..preview_dim {
-        print!("{:6}", format!("N{}", j + 1));
+    for &node_id in nodes.iter().take(preview_dim) {
+        print!("{:6}", format!("N{}", node_id));
     }
     println!();
 
     for (i, row) in matrix.iter().enumerate().take(preview_dim) {
-        print!("{:4}:", format!("N{}", i + 1));
+        print!("{:4}:", format!("N{}", nodes[i]));
         for val in row.iter().take(preview_dim) {
             print!("{:6}", val);
         }

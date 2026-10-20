@@ -21,7 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("==========================================");
     println!("Name:             {}", instance.specification.name);
     println!("Type:             {:?}", instance.specification.dtype);
-    println!("Dimension:        {}", instance.dimension()?);
+    if let Ok(dim) = instance.dimension() {
+        println!("Dimension:        {}", dim);
+    } else {
+        println!("Dimension:        Not specified");
+    }
     if let Some(cap) = instance.specification.capacity {
         println!("Capacity:         {}", cap);
     }
@@ -63,9 +67,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Preview distance between node 1 and 2 if available
-    let nodes = instance.node_identifiers()?;
-    if nodes.len() >= 2 {
+    // Preview distance between first two nodes if available
+    if let Ok(nodes) = instance.node_identifiers()
+        && nodes.len() >= 2
+    {
         let u = nodes[0];
         let v = nodes[1];
         if let Ok(weight) = instance.weight(u, v) {
